@@ -18,15 +18,37 @@ from . import jsonl
 API = "https://api.github.com"
 
 
+TOKEN_HELP = """
+  Create one at https://github.com/settings/tokens
+    "Generate new token (classic)" — no scopes needed for a public repo.
+  Then put it in .env:
+    GITHUB_TOKEN=ghp_your_real_token_here
+"""
+
+
+def _looks_like_placeholder(token: str) -> bool:
+    """The .env.example value, left unedited. Catches the common first run."""
+    return len(token) < 30 or set(token.split("_", 1)[-1]) <= set("x")
+
+
 def _client() -> httpx.Client:
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    if C.GITHUB_TOKEN:
-        headers["Authorization"] = f"Bearer {C.GITHUB_TOKEN}"
+    token = C.GITHUB_TOKEN.strip()
+
+    if not token:
+        print("!  no GITHUB_TOKEN — 60 requests/hour, this will take hours")
+        print(TOKEN_HELP)
+    elif _looks_like_placeholder(token):
+        raise SystemExit(
+            "GITHUB_TOKEN in .env is still the placeholder from .env.example.\n"
+            + TOKEN_HELP
+        )
     else:
-        print("!  no GITHUB_TOKEN — you get 60 requests/hour and this will crawl")
+        headers["Authorization"] = f"Bearer {token}"
+
     return httpx.Client(headers=headers, timeout=30.0)
 
 
@@ -42,6 +64,11 @@ def _paginate(client: httpx.Client, path: str, params: dict[str, Any]) -> Iterat
             print(f"   rate limited — sleeping {wait:.0f}s")
             time.sleep(wait)
             continue
+        if response.status_code == 401:
+            raise SystemExit(
+                "GitHub rejected the token (401). It is expired, revoked, or "
+                "mistyped.\n" + TOKEN_HELP
+            )
         response.raise_for_status()
 
         batch = response.json()
