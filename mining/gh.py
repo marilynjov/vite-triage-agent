@@ -53,10 +53,20 @@ def _client() -> httpx.Client:
 
 
 def _paginate(client: httpx.Client, path: str, params: dict[str, Any]) -> Iterator[dict]:
+    """Walk a list endpoint by following GitHub's own `next` link.
+
+    Counting pages by hand breaks past ~10,000 records: GitHub answers
+    `page=100` with a 422 and tells you to use cursor pagination instead. The
+    cursor is already in the Link header of every response, so following that
+    link costs nothing extra and never hits the wall. Six years of Vite issues
+    is well past it.
+    """
+    url: str | None = f"{API}{path}"
+    query: dict[str, Any] | None = {**params, "per_page": 100}
     page = 1
-    while True:
-        params = {**params, "per_page": 100, "page": page}
-        response = client.get(f"{API}{path}", params=params)
+
+    while url:
+        response = client.get(url, params=query)
 
         if response.status_code == 403 and "rate limit" in response.text.lower():
             reset = int(response.headers.get("x-ratelimit-reset", "0"))
@@ -78,8 +88,10 @@ def _paginate(client: httpx.Client, path: str, params: dict[str, Any]) -> Iterat
 
         remaining = response.headers.get("x-ratelimit-remaining")
         print(f"   page {page:>3}  (+{len(batch)})  budget left: {remaining}", end="\r")
-        if len(batch) < 100:
-            return
+
+        # The next URL already carries every parameter, cursor included.
+        url = response.links.get("next", {}).get("url")
+        query = None
         page += 1
 
 
