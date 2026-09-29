@@ -13,7 +13,12 @@ from . import jsonl
 
 
 def inspect(n: int = 10, seed: int = 0) -> None:
-    rows = list(jsonl.read(C.DATASET_JSONL))
+    # Train only. dataset.jsonl contains the sealed test split, and there is no
+    # reason to let your eyes anywhere near it before Phase 07.
+    source = C.SPLIT_DIR / "train.jsonl"
+    if not source.exists():
+        raise SystemExit("no train split — run `python -m mining split` first")
+    rows = list(jsonl.read(source))
     random.Random(seed).shuffle(rows)
 
     for i, row in enumerate(rows[:n], 1):
