@@ -6,3 +6,9 @@ repos/
 data/raw/
 data/*.jsonl
 data/pinned_sha.txt
+.env.bowling
+
+# Mined corpora from a PRIVATE repo. This project's repo is public, so issue
+# bodies, PR text and commit messages from a private source must never be
+# committed here. data/splits/ (Vite, public) stays the deliberate exception.
+data/bowling/
