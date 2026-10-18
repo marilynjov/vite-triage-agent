@@ -1,0 +1,147 @@
+/* Reusing the template's variables, so dark mode works for free. */
+
+#root {
+  text-align: left; /* the template centres everything; prose shouldn't be */
+}
+
+main {
+  padding: 0 32px 64px;
+}
+
+h1 {
+  margin-bottom: 8px;
+}
+
+.lede {
+  max-width: 60ch;
+  margin-bottom: 32px;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 70ch;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+input,
+textarea {
+  font: inherit;
+  font-size: 16px;
+  padding: 10px 12px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+textarea {
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+button {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 16px;
+  padding: 10px 20px;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.hint {
+  font-size: 14px;
+}
+
+.error {
+  max-width: 70ch;
+  margin-top: 32px;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-left: 3px solid #d9534f;
+  border-radius: 6px;
+}
+
+.error p {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.result {
+  margin-top: 40px;
+}
+
+/* The numbers sit above the answer on purpose: Phase 01 is about cost and
+   latency, not about the prose. */
+.meters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0 0 20px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.meters > div {
+  padding: 12px 24px 12px 0;
+  margin-right: 24px;
+  border-right: 1px solid var(--border);
+}
+
+.meters > div:last-child {
+  border-right: 0;
+}
+
+.meters dt {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.meters dd {
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--text-h);
+  margin: 0;
+}
+
+.answer {
+  max-width: 80ch;
+  margin: 0;
+  padding: 20px 24px;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--text-h);
+  background: var(--code-bg);
+  border-radius: 6px;
+  overflow-x: auto;
+}
