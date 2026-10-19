@@ -164,5 +164,51 @@ now the `ANTHROPIC_MODEL` default. Per structured triage: ~$0.0007. A full
 
 ## Phase 03 — retrieval
 
-_Pending. Record recall@1 / @5 / @10 and MRR for chunking v1 before changing
-anything, then again after each change._
+Scored on **all 206 val rows**. `python -m eval.retrieve --split val --n 206
+--strategy fixed_v1`. No model calls, so every number here is free.
+
+Definitions, because subtly different ones are not comparable:
+`recall@k` is per-issue *fraction of that issue's gold files* in the top k
+retrieved files, averaged over issues — not hit/miss, since mean gold count is
+1.68. `mrr` is 1/(rank of the first gold file found). A hit is a **file**, so
+this is file-level localisation; `css.ts` is 3,685 lines and counting it as found
+does not mean the bug was pinpointed. `clean` excludes the 31 rows whose issue
+text names a gold file — finding those is string matching, not retrieval, and
+clean is the number to quote.
+
+### v1 baseline — fixed character windows (THE NUMBER TO BEAT)
+
+141 files in scope → **1,541 chunks**, 1,200 chars with 200 overlap, embedded
+with `nomic-embed-text` (768d) in 63s. Query is the raw issue title + body,
+never model-rewritten. 206 issues scored in 35s.
+
+| | all | clean |
+|---|---|---|
+| recall@1 | 16.7% | **16.0%** |
+| recall@5 | 51.6% | **49.7%** |
+| **recall@10** | 65.9% | **64.1%** |
+| MRR | 36.1% | **34.5%** |
+
+**recall@10 = 64.1% clean is the v1 baseline.** Every later retrieval claim is
+measured against it.
+
+Three things this says before any improvement is attempted:
+
+1. **The naive version is stronger than it deserves to be.** Fixed windows carry
+   no file path, no imports and no syntax awareness, yet a gold file reaches the
+   top 10 of 141 about two thirds of the time. Vite's filenames and identifiers
+   are semantically loaded, so even a mangled window from `css.ts` says "css"
+   repeatedly. Expect v2's headroom on recall@10 to be smaller than intuition
+   suggests.
+2. **The headroom is at the top of the ranking, not in coverage.** recall@1 is
+   16.0% and MRR 34.5%, so the first correct file averages around rank 3. The
+   right file is usually *somewhere* in the list; it is rarely first. Precision
+   at rank 1-3 is what v2 has to buy.
+3. **Leakage is not inflating the headline** — 65.9% all vs 64.1% clean, a 1.8
+   point gap across 31 rows. The dataset's `mentions_gold_path` flag was worth
+   building, and it turns out not to matter much here.
+
+### v2 — tree-sitter function boundaries
+
+_Pending. Same command with `--strategy function_v2`; the `strategy` column
+keeps both indexes side by side so the comparison needs no re-index._

@@ -1,0 +1,34 @@
+"""Retrieval knobs. Every one of these is a variable you will measure."""
+from __future__ import annotations
+
+import os
+
+from dotenv import load_dotenv
+
+from mining import config as M
+
+load_dotenv(M.ROOT / os.getenv("ENV_FILE", ".env"))
+
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+EMBED_DIM = 768
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://triage:triage@localhost:5433/triage"
+)
+
+# nomic-embed-text is trained with task prefixes. Measured on one spot check,
+# adding them raised the similarity of both a relevant and an irrelevant chunk
+# by the same amount — the margin did not move. Kept on because it is the
+# documented usage, and left as a flag because "does it actually help recall"
+# is answerable with the harness rather than by argument.
+USE_TASK_PREFIX = os.getenv("USE_TASK_PREFIX", "1") == "1"
+DOC_PREFIX = "search_document: " if USE_TASK_PREFIX else ""
+QUERY_PREFIX = "search_query: " if USE_TASK_PREFIX else ""
+
+# Chunking v1: fixed character windows, deliberately naive. The overlap exists
+# so a construct straddling a boundary appears whole in at least one chunk —
+# which is also the strongest argument for why v2 should split on syntax.
+CHUNK_CHARS = int(os.getenv("CHUNK_CHARS", "1200"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
+
+EMBED_BATCH = int(os.getenv("EMBED_BATCH", "64"))
