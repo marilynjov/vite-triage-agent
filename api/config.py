@@ -21,9 +21,10 @@ PROVIDER = os.getenv("PROVIDER", "ollama")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
 
-# Haiku by default because it is ~13x cheaper per triage than Opus. Switch to
-# claude-opus-5 for gate runs and for Phase 07's quality-per-dollar comparison.
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5")
+# Haiku 5.5 by default: ~50x cheaper per triage than Opus 5.5 and 10x cheaper
+# than Haiku 4.5. Switch to claude-opus-5-5 for gate runs and for Phase 07's
+# quality-per-dollar comparison.
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-5-5")
 
 # Output ceiling. Hitting it truncates mid-thought and you pay for the call
 # anyway, so keep it generous.

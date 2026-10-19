@@ -51,3 +51,53 @@ def complete(system: str, user: str, *, max_tokens: int | None = None) -> Comple
         stop_reason=_get(response, "done_reason"),
         raw=response,
     )
+
+
+def complete_structured(
+    system: str,
+    user: str,
+    model: type,
+    *,
+    max_tokens: int | None = None,
+) -> Completion:
+    """Schema-constrained local call. Finished — read it for the paid one.
+
+    Ollama takes a JSON Schema directly in `format`, and llama.cpp turns it into
+    a grammar, so the structure is guaranteed rather than requested. Two things
+    it does NOT guarantee, both measured:
+
+      * numeric ranges. `maximum: 1` does not stop a model returning 90.
+      * length. Without `maxItems` an array rambles until max_tokens cuts the
+        JSON off mid-string.
+
+    So the schema is necessary and not sufficient: `model.model_validate` below
+    is what actually makes the result safe, and it is the reason the frontend
+    needs no defensive code.
+    """
+    from .. import schema as S
+
+    response = _client.chat(
+        model=C.OLLAMA_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        format=S.json_schema(),
+        # Structured output is longer than prose; a truncated object is useless
+        # where truncated prose is merely short.
+        options={"num_predict": max_tokens or C.MAX_TOKENS},
+    )
+
+    message = _get(response, "message") or {}
+    text = _get(message, "content") or ""
+
+    return Completion(
+        text=text,
+        model=C.OLLAMA_MODEL,
+        provider="ollama",
+        input_tokens=_get(response, "prompt_eval_count", 0) or 0,
+        output_tokens=_get(response, "eval_count", 0) or 0,
+        stop_reason=_get(response, "done_reason"),
+        parsed=model.model_validate_json(text),
+        raw=response,
+    )

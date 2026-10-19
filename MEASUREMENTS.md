@@ -103,6 +103,65 @@ unchanged and see whether recall survives a language change.
 
 ---
 
+## Phase 02 — typed output
+
+Classification scored against the GitHub labels the miner already captured, on a
+**fixed 40-row slice of val** (lowest issue numbers first, so runs are
+comparable). `python -m eval.classify --n 40`.
+
+| | qwen2.5-coder:7b | claude-haiku-5-5 |
+|---|---|---|
+| severity | 24/40 — **60%** | 26/40 — **65%** |
+| majority-class baseline | 52% | 52% |
+| component | 8/15 — 53% | 14/15 — **93%** |
+| contract violations | — | 0/40 |
+| wall clock | 784s | 157s |
+| cost | $0.00 | $0.0286 |
+
+**Always quote severity against the 52% baseline.** A constant `"medium"`
+predictor scores 52% on this slice, and an earlier prompt revision scored
+*higher* than its predecessor purely by collapsing to that one class. The
+prediction spread and the confusion matrix are what distinguish skill from
+degeneracy, so report them with the number.
+
+**Severity is near a ceiling set by the label, not the prompt.** Three prompt
+revisions (impact framing, priority framing, tie-break removal) all land within
+a few points of baseline, and nearly every error is off by exactly one tier in
+both directions. Vite's `p2`/`p3`/`p4` encode maintainer roadmap context — what
+is already queued, how risky a fix is near a release — which is absent from the
+issue text. 65% against 52% with that caveat is the honest result; tuning it
+further would be fitting noise.
+
+**Components is the real signal, and the headline number.** 93% against 53% is a
+40-point gap between a 7B and Haiku on the one axis that genuinely is present in
+the report: a less `@import` bug names less and `@import`, and concluding `css`
+is inference from evidence. It is also the direct precursor to Phase 03 —
+`feat: css` → `packages/vite/src/node/plugins/css.ts` is the same localisation
+gradient at finer resolution.
+
+### Two findings that shaped the design
+
+**Field order is generation order.** Grammar-constrained decoding emits
+properties in schema order, so a trailing `reasoning` field rationalises a
+verdict already committed to. Moving it first — one line — is what lifted
+severity off the baseline and broke the single-class collapse. The highest-
+leverage change of the phase, and its mechanism was verifiable in advance.
+
+**Constrained decoding is not validation.** Both providers guarantee object
+shape, property names, enums and types, and neither enforces value constraints.
+Measured three times: Ollama returned `confidence: 90` against `maximum: 1`;
+Haiku wrote 1,340 chars against `maxLength: 1000`, then 7 items against
+`maxItems: 6`. Pydantic at the boundary is load-bearing, not belt-and-braces,
+and is precisely what lets the frontend render with zero defensive field access.
+
+### Cost note
+
+Claude Haiku 5.5 ($0.10 / $0.50 per MTok) is 10x cheaper than Haiku 4.5 and is
+now the `ANTHROPIC_MODEL` default. Per structured triage: ~$0.0007. A full
+206-row val run is ~15 cents. Paid runs are no longer worth rationing.
+
+---
+
 ## Phase 03 — retrieval
 
 _Pending. Record recall@1 / @5 / @10 and MRR for chunking v1 before changing

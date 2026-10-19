@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config as C, cost, db, triage
-from .models import TriageRequest, TriageResponse
+from .models import StructuredTriageResponse, TriageRequest, TriageResponse
 
 
 @asynccontextmanager
@@ -90,6 +90,64 @@ async def triage_naive(request: TriageRequest) -> TriageResponse:
 
     return TriageResponse(
         answer=completion.text,
+        call_id=call_id,
+        model=completion.model,
+        provider=completion.provider,
+        input_tokens=completion.input_tokens,
+        output_tokens=completion.output_tokens,
+        latency_ms=latency_ms,
+        cost_usd=float(cost_usd),
+    )
+
+
+@app.post("/triage/structured", response_model=StructuredTriageResponse)
+async def triage_structured(request: TriageRequest) -> StructuredTriageResponse:
+    """Phase 02. Same accounting as /triage/naive, guaranteed shape out.
+
+    The `except` here carries more weight than the naive route's. Constrained
+    decoding guarantees structure but not value constraints, so this call can
+    fail on the contract itself — a `reasoning` over maxLength, more
+    reproduction_steps than maxItems — which happened three times across 80 eval
+    calls. Turning that into a 500 is the right answer: a malformed TriageResult
+    must never reach the browser, because the frontend has stopped defending
+    against one.
+    """
+    started = time.perf_counter()
+    try:
+        completion = triage.triage_structured(request.title, request.body)
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        await db.record_call(
+            endpoint="/triage/structured",
+            provider=C.PROVIDER,
+            model=C.active_model(),
+            issue_number=None,
+            usage=None,
+            latency_ms=latency_ms,
+            cost_usd=Decimal("0"),
+            stop_reason=None,
+            request_id=None,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    cost_usd = cost.compute_cost(completion)
+
+    call_id = await db.record_call(
+        endpoint="/triage/structured",
+        provider=completion.provider,
+        model=completion.model,
+        issue_number=request.issue_number,
+        usage=completion,
+        latency_ms=latency_ms,
+        cost_usd=cost_usd,
+        stop_reason=completion.stop_reason,
+        request_id=completion.request_id,
+    )
+
+    return StructuredTriageResponse(
+        result=completion.parsed,
         call_id=call_id,
         model=completion.model,
         provider=completion.provider,

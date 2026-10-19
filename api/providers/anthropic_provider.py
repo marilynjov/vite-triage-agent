@@ -81,3 +81,53 @@ def complete(system: str, user: str, *, max_tokens: int | None = None) -> Comple
         provider="anthropic",
         raw=response,
     )
+
+
+def complete_structured(
+    system: str,
+    user: str,
+    model: type,
+    *,
+    max_tokens: int | None = None,
+) -> Completion:
+    """Schema-constrained paid call.
+
+    `messages.parse(output_format=<pydantic class>)` is the SDK helper — not the
+    deprecated top-level `output_format` request parameter. It validates for you
+    and hands back the instance on `.parsed_output`. The raw wire equivalent is
+    `output_config={"format": {"type": "json_schema", "schema": {...}}}` on
+    messages.create(), which you only need if you want the unvalidated JSON.
+    """
+    response = _client().messages.parse(
+        model=C.ANTHROPIC_MODEL,
+        max_tokens=max_tokens or C.MAX_TOKENS,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+        output_format=model,
+    )
+
+    # Before trusting parsed_output. `max_tokens` means a truncated object;
+    # `refusal` means there is no object at all and stop_details says why.
+    if response.stop_reason == "max_tokens":
+        raise ValueError(
+            f"truncated at max_tokens ({response.usage.output_tokens} out) — "
+            "the object is incomplete; raise MAX_TOKENS"
+        )
+    if response.stop_reason == "refusal":
+        category = getattr(response.stop_details, "category", None)
+        raise ValueError(f"model refused (category={category})")
+
+    usage = response.usage
+    return Completion(
+        text=next((b.text for b in response.content if b.type == "text"), ""),
+        model=response.model,
+        provider="anthropic",
+        input_tokens=getattr(usage, "input_tokens", 0) or 0,
+        output_tokens=getattr(usage, "output_tokens", 0) or 0,
+        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        stop_reason=response.stop_reason,
+        request_id=response._request_id,
+        parsed=response.parsed_output,
+        raw=response,
+    )

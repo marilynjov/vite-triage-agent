@@ -22,8 +22,14 @@ from decimal import Decimal
 from .providers.base import Completion
 
 PER_MTOK = {
+    # Haiku 5.5 is the cheap tier and 10x cheaper than Haiku 4.5. These rates
+    # apply to prompts up to 100K tokens; beyond that it is $0.50/$2.50. A
+    # triage here is ~800 input tokens, so the low tier always applies.
+    "claude-haiku-5-5": {"input": Decimal("0.10"), "output": Decimal("0.50")},
     "claude-haiku-4-5": {"input": Decimal("1.00"), "output": Decimal("5.00")},
+    "claude-sonnet-5-5": {"input": Decimal("2.00"), "output": Decimal("10.00")},
     "claude-sonnet-5": {"input": Decimal("2.00"), "output": Decimal("10.00")},
+    "claude-opus-5-5": {"input": Decimal("4.00"), "output": Decimal("20.00")},
     "claude-opus-5": {"input": Decimal("5.00"), "output": Decimal("25.00")},
 }
 

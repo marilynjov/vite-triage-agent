@@ -24,6 +24,11 @@ class Completion:
     stop_reason: str | None = None
     request_id: str | None = None
 
+    # Phase 02: the validated TriageResult, or None for a prose call. Typed as
+    # Any so this module stays free of a schema import — providers never need to
+    # know what shape they were asked for, only to validate against it.
+    parsed: Any = None
+
     # The untouched provider response, for when a number looks wrong and you
     # need to see what actually came back.
     raw: Any = field(default=None, repr=False)

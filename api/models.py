@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from .schema import TriageResult
+
 
 class TriageRequest(BaseModel):
     title: str = Field(min_length=1)
@@ -21,6 +23,24 @@ class TriageRequest(BaseModel):
 
 class TriageResponse(BaseModel):
     answer: str
+    call_id: int
+    model: str
+    provider: str
+    input_tokens: int
+    output_tokens: int
+    latency_ms: int
+    cost_usd: float
+
+
+class StructuredTriageResponse(BaseModel):
+    """Phase 02. Note what is NOT here: no `answer: str`, no optional fields.
+
+    `result` is a TriageResult or the request failed. That is the whole point —
+    the frontend gets a guaranteed shape, which is what lets it render without
+    a single defensive optional-chain.
+    """
+
+    result: TriageResult
     call_id: int
     model: str
     provider: str
