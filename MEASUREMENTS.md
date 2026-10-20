@@ -241,7 +241,46 @@ the headroom was at the top of the ranking (recall@1 16%, MRR 34.5%, first hit
 around rank 3), which is why recall@1 and MRR were the metrics to watch. Picking
 the metric *before* running the experiment is what made this legible.
 
-### v2 — tree-sitter function boundaries
+### v2 — tree-sitter function boundaries (a negative result, with a cause)
 
-_Pending. Same command with `--strategy function_v2`; the `strategy` column
-keeps both indexes side by side so the comparison needs no re-index._
+One chunk per top-level declaration via tree-sitter, header kept identical so
+only the boundaries changed. Oversized units sub-windowed; large classes split
+into methods; unparseable files fall back to v1+header.
+
+| | v1 clean | v1+header clean | function_v2 clean |
+|---|---|---|---|
+| recall@1 | 16.0% | **24.1%** | 22.7% |
+| recall@5 | 49.7% | **54.0%** | 53.5% |
+| recall@10 | 64.1% | **68.5%** | 68.1% |
+| MRR | 34.5% | **43.8%** | 43.0% |
+
+1,541 → 2,440 chunks; indexing 98s → 141s. **Slightly worse on every metric**,
+for more chunks and more time.
+
+**The cause, measured rather than guessed:**
+
+| | median body chars | chunks under 200 chars |
+|---|---|---|
+| v1+header | 1,200 | 0% (1 of 1,541) |
+| function_v2 | 344 | **39% (958 of 2,440)** |
+
+Respecting syntax means respecting that source files are mostly one-line
+declarations. `const decoder = new TextDecoder()` is 33 characters against a
+~250-character header, so 39% of v2's chunks are **majority header** — their
+embeddings are dominated by the path and import list, making every small chunk
+in a file near-identical to every other. The index gained ~900 low-signal
+near-duplicate vectors competing for top-k slots, and because files rank by
+their single best chunk, that best chunk became more often a header-dominated
+fragment than real code.
+
+**What this says about the project, not just the chunker.** The header result and
+this one point the same way: in this corpus the retrievable signal lives at
+*file* granularity — what a file is about — rather than at declaration
+granularity. Issue text says "less @import fails"; it does not name a function.
+So context beat boundaries, and finer boundaries actively hurt once chunks fell
+below the size where they carry meaning.
+
+**The implied fix, untested:** merge adjacent small declarations until each chunk
+carries a floor of real code (~600-800 chars), keeping syntax boundaries only
+where they fall at useful sizes. That is the version that would beat v1+header,
+and the hypothesis is specific enough to be falsifiable.

@@ -32,3 +32,7 @@ CHUNK_CHARS = int(os.getenv("CHUNK_CHARS", "1200"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
 
 EMBED_BATCH = int(os.getenv("EMBED_BATCH", "64"))
+
+# A unit bigger than this gets sub-windowed. Some Vite functions are 400 lines;
+# embedding one as a single chunk dilutes it to mush.
+MAX_UNIT_CHARS = int(os.getenv("MAX_UNIT_CHARS", "2400"))
