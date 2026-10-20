@@ -208,6 +208,39 @@ Three things this says before any improvement is attempted:
    point gap across 31 rows. The dataset's `mentions_gold_path` flag was worth
    building, and it turns out not to matter much here.
 
+### v1 + header — the same windows, told where they came from
+
+`p3d` bundles two independent changes: splitting on syntax, and giving a chunk
+context about itself. Separated them and tested the cheap one first. Every chunk
+gets the file path and up to 20 import lines prepended; chunk boundaries are
+byte-for-byte identical to v1. Three lines of code, no new dependency.
+
+| | v1 clean | v1+header clean | change |
+|---|---|---|---|
+| **recall@1** | 16.0% | **24.1%** | **+8.1 pts, +51% relative** |
+| recall@5 | 49.7% | 54.0% | +4.3 |
+| recall@10 | 64.1% | **68.5%** | +4.4 |
+| **MRR** | 34.5% | **43.8%** | **+9.3 pts, +27% relative** |
+
+Indexing 63s → 98s (more tokens to embed). Scoring unchanged at ~37s. Free.
+
+**The mechanism.** Before, a chunk of `css.ts` was retrievable only if that
+particular 1,200-character window happened to contain the issue's vocabulary —
+"less", "@import", "postcss". Most windows of a 3,685-line file do not, so a
+file's rank was decided by whether the bug's words fell inside one lucky window.
+With the header, all 14 chunks of `css.ts` carry
+`packages/vite/src/node/plugins/css.ts` and `import type Less from 'less'`, so
+the whole file is reachable from a topical query. Files rank by their single best
+chunk, so raising the floor across every chunk of a file raises where that file
+lands — which is rank precision, not coverage.
+
+**The methodological point, and the one worth saying out loud.** recall@10 moved
+only 4.4 points. Judged by the headline metric alone this change looks marginal;
+it actually improved rank-1 accuracy by half. The baseline had already shown that
+the headroom was at the top of the ranking (recall@1 16%, MRR 34.5%, first hit
+around rank 3), which is why recall@1 and MRR were the metrics to watch. Picking
+the metric *before* running the experiment is what made this legible.
+
 ### v2 — tree-sitter function boundaries
 
 _Pending. Same command with `--strategy function_v2`; the `strategy` column
