@@ -30,6 +30,11 @@ create index if not exists calls_created_at_idx on calls (created_at desc);
 -- the comparison the gate demands needs no re-index and no second database.
 create table if not exists chunks (
     id          bigserial primary key,
+    -- owner/name of the repo this chunk came from. Without it, indexing a
+    -- second repo pools its chunks with the first and queries silently return
+    -- files from the wrong codebase — the same failure DATA_DIR prevents on the
+    -- mining side, and just as invisible.
+    corpus      text         not null,
     strategy    text         not null,
     path        text         not null,
     start_line  integer      not null,
@@ -40,7 +45,13 @@ create table if not exists chunks (
     embedding   vector(768)  not null
 );
 
-create index if not exists chunks_strategy_idx on chunks (strategy);
+-- Migration for databases created before `corpus` existed. `create table if
+-- not exists` above does nothing to a table that is already there.
+alter table chunks add column if not exists corpus text;
+update chunks set corpus = 'vitejs/vite' where corpus is null;
+alter table chunks alter column corpus set not null;
+
+create index if not exists chunks_corpus_strategy_idx on chunks (corpus, strategy);
 -- Cosine, because the embeddings are not normalised to unit length by us and
 -- cosine is what nomic-embed-text is trained for.
 create index if not exists chunks_embedding_idx

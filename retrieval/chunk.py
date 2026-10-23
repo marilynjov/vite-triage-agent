@@ -58,7 +58,46 @@ def fixed_windows(path: str, source: str) -> list[Chunk]:
     return chunks
 
 
-IMPORT_LINE = re.compile(r"^\s*(?:import\b|export\s+(?:\*|\{)|from\b)")
+# Deliberately cross-language: `import` (JS/TS/Python/Java/Swift/Go),
+# `from` (Python/JS), `use` (Rust/PHP), `require` (Ruby/JS), `#include` (C/C++),
+# `package` (Java/Go). A header that silently loses its imports on a non-TS repo
+# would quietly cost the +8 points the header is worth.
+IMPORT_LINE = re.compile(
+    r"^\s*(?:import\b|from\b|use\b|require\b|#include\b|package\b"
+    r"|export\s+(?:\*|\{))"
+)
+
+# Node types that count as one retrievable unit, per tree-sitter grammar. The
+# fallback heuristic covers grammars not listed: almost every tree-sitter
+# language names its top-level nodes *_declaration or *_definition.
+UNIT_TYPES_BY_LANGUAGE = {
+    "typescript": {
+        "function_declaration", "generator_function_declaration",
+        "class_declaration", "interface_declaration", "type_alias_declaration",
+        "enum_declaration", "lexical_declaration", "variable_declaration",
+    },
+    "tsx": {
+        "function_declaration", "class_declaration", "interface_declaration",
+        "type_alias_declaration", "enum_declaration", "lexical_declaration",
+    },
+    "python": {"function_definition", "class_definition", "decorated_definition"},
+    "swift": {
+        "function_declaration", "class_declaration", "protocol_declaration",
+        "property_declaration", "typealias_declaration", "enum_declaration",
+    },
+    "go": {"function_declaration", "method_declaration", "type_declaration"},
+    "rust": {"function_item", "struct_item", "enum_item", "impl_item", "trait_item"},
+}
+
+# importlib path per grammar: (module, factory function).
+GRAMMARS = {
+    "typescript": ("tree_sitter_typescript", "language_typescript"),
+    "tsx": ("tree_sitter_typescript", "language_tsx"),
+    "python": ("tree_sitter_python", "language"),
+    "swift": ("tree_sitter_swift", "language"),
+    "go": ("tree_sitter_go", "language"),
+    "rust": ("tree_sitter_rust", "language"),
+}
 
 
 def _header(path: str, source: str) -> str:
@@ -103,38 +142,60 @@ def fixed_windows_with_header(path: str, source: str) -> list[Chunk]:
 # Declarations worth treating as one retrievable unit. `export_statement` is
 # unwrapped rather than listed, since `export function foo()` parses as an export
 # wrapping the declaration.
-UNIT_TYPES = {
-    "function_declaration",
-    "generator_function_declaration",
-    "class_declaration",
-    "interface_declaration",
-    "type_alias_declaration",
-    "enum_declaration",
-    "lexical_declaration",      # const foo = () => {...}
-    "variable_declaration",
-}
+_parser: object | None = None
+_parser_for: str | None = None
 
-_parser = None
+
+def _unit_types() -> set[str]:
+    return UNIT_TYPES_BY_LANGUAGE.get(R.TREE_SITTER_LANGUAGE, set())
+
+
+def _is_unit(node_type: str) -> bool:
+    """Known grammar: an explicit set. Unknown grammar: a suffix heuristic."""
+    known = _unit_types()
+    if known:
+        return node_type in known
+    return node_type.endswith(("_declaration", "_definition", "_item"))
 
 
 def _get_parser():
-    """Built once. Constructing a Parser per file dominates the runtime."""
-    global _parser
-    if _parser is None:
+    """Built once per language. Returns None when the grammar is unavailable.
+
+    A missing grammar is not an error — it means v2 degrades to v1+header for
+    that corpus, which is a working strategy, just a coarser one.
+    """
+    global _parser, _parser_for
+    language = R.TREE_SITTER_LANGUAGE
+    if not language:
+        return None
+    if _parser is not None and _parser_for == language:
+        return _parser
+
+    spec = GRAMMARS.get(language)
+    if spec is None:
+        return None
+    try:
+        import importlib
         import tree_sitter
-        import tree_sitter_typescript as tsts
-        _parser = tree_sitter.Parser(tree_sitter.Language(tsts.language_typescript()))
-    return _parser
+        module = importlib.import_module(spec[0])
+        _parser = tree_sitter.Parser(
+            tree_sitter.Language(getattr(module, spec[1])())
+        )
+        _parser_for = language
+        return _parser
+    except Exception:
+        # Grammar not installed for this language. Caller falls back.
+        return None
 
 
 def _units(node):
-    """Top-level declarations, with export wrappers unwrapped."""
+    """Top-level declarations, with export/decorator wrappers unwrapped."""
     for child in node.children:
-        if child.type == "export_statement":
-            inner = [c for c in child.children if c.type in UNIT_TYPES]
+        if child.type in ("export_statement", "decorated_definition"):
+            inner = [c for c in child.children if _is_unit(c.type)]
             # `export { a, b }` has no declaration child — nothing to chunk.
             yield from (inner or [])
-        elif child.type in UNIT_TYPES:
+        elif _is_unit(child.type):
             yield child
 
 
@@ -157,8 +218,12 @@ def function_boundaries(path: str, source: str) -> list[Chunk]:
     Falls back to v1+header for a file tree-sitter cannot parse, rather than
     silently dropping it from the index.
     """
+    parser = _get_parser()
+    if parser is None:
+        # No grammar for this language — v1+header is the honest fallback.
+        return fixed_windows_with_header(path, source)
     try:
-        tree = _get_parser().parse(source.encode("utf8"))
+        tree = parser.parse(source.encode("utf8"))
     except Exception:
         return fixed_windows_with_header(path, source)
 

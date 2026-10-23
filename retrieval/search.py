@@ -32,11 +32,11 @@ def search_chunks(query: str, *, strategy: str = "fixed_v1", k: int = 50) -> lis
             """
             select path, start_line, end_line, text, 1 - (embedding <=> %s::vector)
             from chunks
-            where strategy = %s
+            where corpus = %s and strategy = %s
             order by embedding <=> %s::vector
             limit %s
             """,
-            (vector, strategy, vector, k),
+            (vector, R.CORPUS, strategy, vector, k),
         ).fetchall()
     return [Hit(p, float(s), sl, el, t) for p, sl, el, t, s in rows]
 

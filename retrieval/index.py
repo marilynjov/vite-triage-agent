@@ -46,7 +46,8 @@ def main() -> None:
     sha = M.PINNED_SHA.read_text().strip()
 
     files = in_scope_files(sha)
-    print(f"strategy {args.strategy}   pinned {sha[:10]}   {len(files)} files in scope")
+    print(f"corpus {R.CORPUS}   strategy {args.strategy}   pinned {sha[:10]}   "
+          f"{len(files)} files in scope   lang {R.TREE_SITTER_LANGUAGE or '(none)'}")
 
     chunker = K.STRATEGIES[args.strategy]
     chunks: list[K.Chunk] = []
@@ -60,19 +61,21 @@ def main() -> None:
 
     with psycopg.connect(R.DATABASE_URL) as conn:
         if args.rebuild:
-            n = conn.execute("delete from chunks where strategy = %s",
-                             (args.strategy,)).rowcount
+            n = conn.execute(
+                "delete from chunks where corpus = %s and strategy = %s",
+                (R.CORPUS, args.strategy),
+            ).rowcount
             print(f"deleted          {n:,} existing rows")
         with conn.cursor() as cur:
             cur.executemany(
-                "insert into chunks (strategy, path, start_line, end_line, text, embedding)"
-                " values (%s, %s, %s, %s, %s, %s)",
-                [(args.strategy, c.path, c.start_line, c.end_line, c.text, str(v))
-                 for c, v in zip(chunks, vectors)],
+                "insert into chunks (corpus, strategy, path, start_line, end_line,"
+                " text, embedding) values (%s, %s, %s, %s, %s, %s, %s)",
+                [(R.CORPUS, args.strategy, c.path, c.start_line, c.end_line,
+                  c.text, str(v)) for c, v in zip(chunks, vectors)],
             )
         conn.commit()
 
-    print(f"→ {len(chunks):,} rows in chunks, strategy={args.strategy}")
+    print(f"→ {len(chunks):,} rows in chunks, corpus={R.CORPUS} strategy={args.strategy}")
 
 
 if __name__ == "__main__":

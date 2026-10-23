@@ -9,6 +9,15 @@ from mining import config as M
 
 load_dotenv(M.ROOT / os.getenv("ENV_FILE", ".env"))
 
+# Which repo this index belongs to. Taken from the same values the miner uses,
+# so `ENV_FILE=.env.bowling` points mining AND retrieval at the same corpus
+# without a second setting to forget.
+CORPUS = f"{M.OWNER}/{M.NAME}"
+
+# tree-sitter grammar for chunking v2. Empty disables the parser and falls back
+# to v1+header, which works on any language.
+TREE_SITTER_LANGUAGE = os.getenv("TREE_SITTER_LANGUAGE", "typescript")
+
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 EMBED_DIM = 768
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
