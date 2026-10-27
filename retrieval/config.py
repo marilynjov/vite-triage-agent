@@ -14,6 +14,11 @@ load_dotenv(M.ROOT / os.getenv("ENV_FILE", ".env"))
 # without a second setting to forget.
 CORPUS = f"{M.OWNER}/{M.NAME}"
 
+# What the CLI and the API search with when not told otherwise: the best
+# strategy measured on Vite val (recall@10 68.5% clean). The eval harness keeps
+# its own explicit --strategy, so changing this never moves a recorded number.
+DEFAULT_STRATEGY = os.getenv("STRATEGY", "fixed_v1_header")
+
 # tree-sitter grammar for chunking v2. Empty disables the parser and falls back
 # to v1+header, which works on any language.
 TREE_SITTER_LANGUAGE = os.getenv("TREE_SITTER_LANGUAGE", "typescript")

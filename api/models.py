@@ -48,3 +48,29 @@ class StructuredTriageResponse(BaseModel):
     output_tokens: int
     latency_ms: int
     cost_usd: float
+
+
+class RetrieveRequest(BaseModel):
+    """Retrieval only: no model call, so no cost and no row in `calls`."""
+    title: str = Field(min_length=1)
+    body: str = ""
+    # owner/name of an indexed repo. None means the one ENV_FILE points at.
+    corpus: str | None = None
+    strategy: str | None = None
+    k: int = Field(default=10, ge=1, le=50)
+
+
+class RetrievedFile(BaseModel):
+    path: str
+    score: float
+    # The chunk that ranked this file, so the UI can show why it is here.
+    start_line: int
+    end_line: int
+    snippet: str
+
+
+class RetrieveResponse(BaseModel):
+    corpus: str
+    strategy: str
+    files: list[RetrievedFile]
+    latency_ms: int

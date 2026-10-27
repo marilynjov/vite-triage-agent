@@ -2,6 +2,7 @@
 
     python -m eval.retrieve --n 40
     python -m eval.retrieve --split val --n 206 --strategy fixed_v1
+    ENV_FILE=.env.bowling python -m eval.retrieve --split all --strategy fixed_v1_header
 
 Definitions, stated explicitly because subtly different ones are not comparable
 and you will be quoting these numbers for weeks:
@@ -63,12 +64,21 @@ def score_one(row: dict, k_values: list[int], strategy: str) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split", default="val")
+    ap.add_argument("--split", default="val",
+                    help="train/val/test, or 'all' for a corpus too small to split")
     ap.add_argument("--n", type=int, default=40)
     ap.add_argument("--strategy", default="fixed_v1")
     args = ap.parse_args()
 
-    rows = [json.loads(l) for l in open(M.SPLIT_DIR / f"{args.split}.jsonl")]
+    if args.split == "all":
+        # For a corpus under split.py's 30-row floor, the whole dataset is the
+        # eval set. Refused once a split exists: "all" includes test.jsonl, and
+        # reading it before Phase 07 spends it as evidence.
+        if (M.SPLIT_DIR / "test.jsonl").exists():
+            raise SystemExit("this corpus has a sealed test split — use --split val")
+        rows = [json.loads(l) for l in open(M.DATASET_JSONL)]
+    else:
+        rows = [json.loads(l) for l in open(M.SPLIT_DIR / f"{args.split}.jsonl")]
     # Fixed slice, lowest issue numbers first, so two runs are comparable.
     slice_ = sorted(rows, key=lambda r: r["issue"])[: args.n]
 

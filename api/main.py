@@ -9,10 +9,19 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+
+from retrieval import config as R, search
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config as C, cost, db, triage
-from .models import StructuredTriageResponse, TriageRequest, TriageResponse
+from .models import (
+    RetrievedFile,
+    RetrieveRequest,
+    RetrieveResponse,
+    StructuredTriageResponse,
+    TriageRequest,
+    TriageResponse,
+)
 
 
 @asynccontextmanager
@@ -156,6 +165,44 @@ async def triage_structured(request: TriageRequest) -> StructuredTriageResponse:
         latency_ms=latency_ms,
         cost_usd=float(cost_usd),
     )
+
+
+@app.post("/retrieve", response_model=RetrieveResponse)
+def retrieve(request: RetrieveRequest) -> RetrieveResponse:
+    """Phase 03 behind HTTP: issue in, the files to open out, no model involved.
+
+    The query is built exactly as eval/retrieve.py builds it — title, blank
+    line, body — so what this returns is what recall@k measured. A plain `def`,
+    not `async`, because search is synchronous psycopg and embedding; FastAPI
+    runs it in a thread instead of blocking the event loop.
+    """
+    corpus = request.corpus or R.CORPUS
+    strategy = request.strategy or R.DEFAULT_STRATEGY
+    started = time.perf_counter()
+    hits = search.search_ranked(
+        f"{request.title}\n\n{request.body}",
+        strategy=strategy, k=request.k, corpus=corpus,
+    )
+    if not hits:
+        # Unindexed looks identical to "nothing relevant" unless we say so.
+        have = [f"{c} ({s})" for c, s, _ in search.indexed()]
+        raise HTTPException(404, f"no index for {corpus} ({strategy}); indexed: {have}")
+    return RetrieveResponse(
+        corpus=corpus,
+        strategy=strategy,
+        files=[
+            RetrievedFile(path=f.path, score=round(f.score, 4), start_line=f.best.start_line,
+                          end_line=f.best.end_line, snippet=f.best.text)
+            for f in hits
+        ],
+        latency_ms=int((time.perf_counter() - started) * 1000),
+    )
+
+
+@app.get("/corpora")
+def corpora() -> list[dict]:
+    """What /retrieve can search."""
+    return [{"corpus": c, "strategy": s, "chunks": n} for c, s, n in search.indexed()]
 
 
 @app.get("/calls")

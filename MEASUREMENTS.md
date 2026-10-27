@@ -284,3 +284,30 @@ below the size where they carry meaning.
 carries a floor of real code (~600-800 chars), keeping syntax boundaries only
 where they fall at useful sizes. That is the version that would beat v1+header,
 and the hypothesis is specific enough to be falsifiable.
+
+### Generalization — the Vite-tuned retriever on the private Swift repo (2026-10-27)
+
+`fixed_v1_header`, unchanged from Vite, on all 16 rows. The corpus is under
+split.py's 30-row floor, so `--split all` scores the whole dataset; it refuses
+on any corpus that has a sealed test split.
+`ENV_FILE=.env.bowling python -m eval.retrieve --split all --strategy fixed_v1_header`
+
+| | vitejs/vite val, clean (n=175) | private Swift repo (n=16, 0 leaky) |
+|---|---|---|
+| recall@1 | 24.1% | 44.4% |
+| recall@5 | 54.0% | 73.2% |
+| recall@10 | 68.5% | **78.0%** |
+| MRR | 43.8% | **87.5%** |
+| recall@1 ceiling (mean of 1/gold count) | 86.3% | 54.3% |
+| files in scope | 141 | 58 |
+
+**What it says:** recall survived a change of language with no Swift grammar
+installed, because v1+header needs none. The header carries the signal, not
+the parser. MRR of 87.5% means the first right file is usually at rank 1.
+recall@1 looks lower only because these fixes touch 2.6 files on average, which
+caps it at 54.3%.
+
+**What it does not say:** that the retriever is better on Swift. There are 2.4x
+fewer files to choose among, and the issues name intentions rather than
+symptoms, and intentions match file names. With 16 rows each one is worth
+~6 points. Read it as "did not collapse", not as a comparison.
