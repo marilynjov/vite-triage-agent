@@ -33,6 +33,10 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-5-5")
 # anyway, so keep it generous.
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "16000"))
 
+# How many retrieved files /triage/grounded shows the model. 10 matches the
+# recall@10 that bounds what the model can find.
+GROUNDED_K = int(os.getenv("GROUNDED_K", "10"))
+
 SCHEMA_SQL = Path(__file__).resolve().parent / "schema.sql"
 
 

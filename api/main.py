@@ -12,9 +12,11 @@ from fastapi import FastAPI, HTTPException
 
 from retrieval import config as R, search
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from . import config as C, cost, db, triage
 from .models import (
+    GroundedTriageResponse,
     RetrievedFile,
     RetrieveRequest,
     RetrieveResponse,
@@ -157,6 +159,80 @@ async def triage_structured(request: TriageRequest) -> StructuredTriageResponse:
 
     return StructuredTriageResponse(
         result=completion.parsed,
+        call_id=call_id,
+        model=completion.model,
+        provider=completion.provider,
+        input_tokens=completion.input_tokens,
+        output_tokens=completion.output_tokens,
+        latency_ms=latency_ms,
+        cost_usd=float(cost_usd),
+    )
+
+
+@app.post("/triage/grounded", response_model=GroundedTriageResponse)
+async def triage_grounded(request: TriageRequest) -> GroundedTriageResponse:
+    """Retrieval, then structured triage that picks among what it found.
+
+    Its own endpoint, not a flag on /triage/structured, so Phase 02's numbers
+    and its `calls` rows stay comparable. The query is built exactly as
+    /retrieve and the harness build it. Search and the model call are both
+    synchronous, so they run in a thread rather than on the event loop.
+
+    A suspected file outside the candidates fails the request like any other
+    contract violation, and is recorded as one.
+    """
+    corpus, strategy = R.CORPUS, R.DEFAULT_STRATEGY
+    started = time.perf_counter()
+    candidates = await run_in_threadpool(
+        search.search_ranked, f"{request.title}\n\n{request.body}",
+        strategy=strategy, k=C.GROUNDED_K, corpus=corpus,
+    )
+    if not candidates:
+        raise HTTPException(404, f"no index for {corpus} ({strategy})")
+    try:
+        completion = await run_in_threadpool(
+            triage.triage_grounded, request.title, request.body, candidates
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        await db.record_call(
+            endpoint="/triage/grounded",
+            provider=C.PROVIDER,
+            model=C.active_model(),
+            issue_number=None,
+            usage=None,
+            latency_ms=latency_ms,
+            cost_usd=Decimal("0"),
+            stop_reason=None,
+            request_id=None,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    cost_usd = cost.compute_cost(completion)
+
+    call_id = await db.record_call(
+        endpoint="/triage/grounded",
+        provider=completion.provider,
+        model=completion.model,
+        issue_number=request.issue_number,
+        usage=completion,
+        latency_ms=latency_ms,
+        cost_usd=cost_usd,
+        stop_reason=completion.stop_reason,
+        request_id=completion.request_id,
+    )
+
+    return GroundedTriageResponse(
+        result=completion.parsed,
+        candidates=[
+            RetrievedFile(path=f.path, score=round(f.score, 4), start_line=f.best.start_line,
+                          end_line=f.best.end_line, snippet=f.best.text)
+            for f in candidates
+        ],
+        corpus=corpus,
+        strategy=strategy,
         call_id=call_id,
         model=completion.model,
         provider=completion.provider,

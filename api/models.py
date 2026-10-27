@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .schema import TriageResult
+from .schema import GroundedTriageResult, TriageResult
 
 
 class TriageRequest(BaseModel):
@@ -74,3 +74,23 @@ class RetrieveResponse(BaseModel):
     strategy: str
     files: list[RetrievedFile]
     latency_ms: int
+
+
+class GroundedTriageResponse(BaseModel):
+    """Structured triage that was shown retrieval's candidates first.
+
+    `candidates` is what the model chose from, in retrieval's order, so a
+    reader can compare the two rankings side by side.
+    """
+
+    result: GroundedTriageResult
+    candidates: list[RetrievedFile]
+    corpus: str
+    strategy: str
+    call_id: int
+    model: str
+    provider: str
+    input_tokens: int
+    output_tokens: int
+    latency_ms: int
+    cost_usd: float

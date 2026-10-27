@@ -24,16 +24,19 @@ what the fix actually touched. That one constraint explains most of the design.
                     ┌──────────────── online, per issue ───────────────┼───────────┐
                     │                                                  ▼           │
   issue text ──► retrieval.search ──► ranked files ──► POST /retrieve, CLI, eval   │
-            └──► api.triage ──► providers ──► TriageResult ──► POST /triage/*      │
+            │                            │ top 10 as candidates                    │
+            │                            ▼                                         │
+            └──► api.triage ──► providers ──► (Grounded)TriageResult ──► /triage/* │
                                                    │                               │
                                                    └──► Postgres `calls` (every    │
                                                         model call, incl. failures)│
                     └──────────────────────────────────────────────────────────────┘
 ```
 
-Retrieval and triage are still separate paths. Joining them, so that the
-top-k files are passed into `/triage/structured`, is the next step and the
-lead-in to Phase 04.
+`/triage/naive` and `/triage/structured` see only the issue. `/triage/grounded`
+first retrieves the top 10 files and asks the model to pick, from those only,
+the ones the fix touches. It is scored by `eval/grounded.py` against retrieval
+alone on the same rows.
 
 ---
 
@@ -43,7 +46,7 @@ lead-in to Phase 04.
 |---|---|---|
 | `mining/` | issue → fix labels, the pinned SHA, the temporal split | git, GitHub REST |
 | `retrieval/` | chunking, embedding, the `chunks` table, search | Ollama (embeddings), Postgres |
-| `eval/` | scoring: `retrieve` (recall@k, MRR), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `api/` |
+| `eval/` | scoring: `retrieve` (recall@k, MRR), `grounded` (model re-rank vs retrieval), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `api/` |
 | `api/` | FastAPI routes, prompts, the provider seam, cost, the `calls` table | `retrieval/`, providers, Postgres |
 | `web/` | one React page over the API | `api/` over HTTP |
 | `scripts/` | `gen_types.py`: Pydantic → TypeScript | `api/schema.py` |
@@ -121,6 +124,12 @@ averaged over issues and reported for `all` and `clean`.
 `--split all` exists for corpora below `split.py`'s 30-row floor. It refuses to
 run on any corpus that has a sealed test split.
 
+`eval/grounded.py` scores the model's `suspected_files` with the same
+`score_ranking` as retrieval, from the same candidates, so the only variable is
+who ordered them. The model can't beat retrieval's recall@10 (it only sees the
+top 10), so recall@1 and MRR are what it can move. A contract violation scores
+zero.
+
 `eval/classify.py` scores Phase 02 output against GitHub labels (severity
 from `p2`/`p3`/`p4`, components from `feat: *`). It always prints the
 majority-class baseline, because a constant answer once beat a real prompt.
@@ -146,6 +155,9 @@ route ─► triage.py (owns the prompt) ─► providers.complete[_structured] 
 - **Cost is computed, not estimated.** `cost.py` prices the token counts the
   provider reports, at four rates (input, output, cache write, cache read).
   Local models cost $0.
+- **Ollama's context window is set explicitly.** `num_ctx` defaults to a
+  window that silently truncates a long prompt from the front. A grounded
+  prompt is ~6.9k tokens, and without `OLLAMA_NUM_CTX` qwen saw 2,050 of them.
 - **No ORM.** `db.py` is raw psycopg with a small pool. There are only a
   handful of queries, and each one is worth reading literally.
 - **`/retrieve` and `/corpora` make no model call**, so they aren't logged to
@@ -155,7 +167,11 @@ route ─► triage.py (owns the prompt) ─► providers.complete[_structured] 
 ## 5. The typed contract: one definition, three consumers
 
 `api/schema.py::TriageResult` is the single source of truth for structured
-output:
+output. `GroundedTriageResult` subclasses it, adding `suspected_files`;
+whether those paths were actually among the candidates depends on the request,
+so `triage.check_candidates` enforces that after validation.
+
+Its three consumers:
 
 1. Both providers constrain decoding to its JSON Schema.
 2. Pydantic validates at the route. This step is **load-bearing**: neither
@@ -163,7 +179,8 @@ output:
    them. An invalid result becomes a 500 and never reaches the browser.
 3. `scripts/gen_types.py` emits `web/src/types.generated.ts`, so changing a
    field breaks the frontend build, not production. That lets `App.tsx`
-   render with zero defensive field access.
+   render with zero defensive field access. The subclass is emitted as
+   `TriageResult & { suspected_files }`.
 
 Field order matters. `reasoning` comes first because constrained decoding
 emits properties in schema order, so a leading reasoning field works as
@@ -213,7 +230,6 @@ migration.
 
 | Phase | Attaches at |
 |---|---|
-| next step | `api/triage.py`: put `search.search_ranked` output into the structured prompt. Record it as a new endpoint or strategy so Phase 02 numbers stay comparable. |
 | 04 Tools | new `read_file`/`grep`/`list_dir`/`git_log`, sandboxed to `REPO_PATH` at the pinned SHA, the same snapshot the index and labels describe |
 | 05 Agent loop | sits above the provider seam. Step, token, time and dollar limits come from the same `Completion` accounting that feeds `calls`. Graded with the same recall@k as retrieval, for the A/B |
 | 06 Workflow | each stage gets a typed output in the style of `TriageResult` |

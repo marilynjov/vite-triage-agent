@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from . import config as C
 from .providers import Completion, complete, complete_structured
-from .schema import TriageResult
+from .schema import GroundedTriageResult, TriageResult
 
 SYSTEM = """\
 You are standing in for a Vite maintainer doing first-pass triage on a bug
@@ -155,3 +155,70 @@ def triage_structured(title: str, body: str) -> Completion:
         TriageResult,
         max_tokens=C.MAX_TOKENS,
     )
+
+
+# Grounded triage. Phase 02's prompt, plus a section on the candidates. Kept as
+# an addition rather than an edit so STRUCTURED_SYSTEM — and every Phase 02
+# number — stays exactly what it was.
+GROUNDED_SYSTEM = STRUCTURED_SYSTEM + """
+**Candidate files**
+
+After the report you are given candidate source files, each with the excerpt
+that a similarity search matched. They are ranked by text similarity to the
+report, not by relevance to the bug: the search cannot tell a file that
+mentions the same words from the file that contains the fault.
+
+In `suspected_files`, list up to five candidates the fix for this report would
+most likely change, most likely first. Use paths exactly as given, and only
+paths from the list. Judge each one by what its excerpt and path show it does,
+against what the report says goes wrong; keep the search order only where the
+evidence does not separate two files. An empty list is correct when no
+candidate fits.
+
+You have seen excerpts, not whole files. Say which excerpt supports a choice,
+and do not claim to have read anything beyond them.
+"""
+
+
+def grounded_prompt(title: str, body: str, candidates: list) -> str:
+    """The issue as filed, then each candidate in retrieval's rank order.
+
+    `candidates` are retrieval.search.FileHit. The excerpt is the chunk that
+    ranked the file, header included, so the model sees what the search saw.
+    """
+    parts = [f"Title: {title}\n\n{body}", "---\n\nCandidate files:"]
+    for rank, f in enumerate(candidates, 1):
+        parts.append(
+            f"[{rank}] {f.path}:{f.best.start_line}-{f.best.end_line}\n"
+            f"```\n{f.best.text}\n```"
+        )
+    return "\n\n".join(parts)
+
+
+def check_candidates(result: GroundedTriageResult, candidates: list) -> None:
+    """A path the model was not shown is a contract violation, not a guess.
+
+    It is checked here rather than in the schema because the allowed set changes
+    with every request. Raised as ValueError so the route and the eval treat it
+    exactly like a maxLength breach — and count it.
+    """
+    allowed = {f.path for f in candidates}
+    unknown = [p for p in result.suspected_files if p not in allowed]
+    if unknown:
+        raise ValueError(f"suspected_files not among the candidates: {unknown}")
+
+
+def triage_grounded(title: str, body: str, candidates: list) -> Completion:
+    """Structured triage with retrieval's candidates in the prompt.
+
+    Retrieval is the caller's job, so the eval can score the same candidate
+    list as the retrieval-only baseline without searching twice.
+    """
+    completion = complete_structured(
+        GROUNDED_SYSTEM,
+        grounded_prompt(title, body, candidates),
+        GroundedTriageResult,
+        max_tokens=C.MAX_TOKENS,
+    )
+    check_candidates(completion.parsed, candidates)
+    return completion
