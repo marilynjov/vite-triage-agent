@@ -324,3 +324,56 @@ like a beta test, a licensing conversation or a done-criteria review, still get
 five files, because the retriever has no way to abstain. Those had the lowest
 top scores (0.64–0.72, against ~0.75–0.85 for code issues), so a score floor
 is a cheap first abstain signal. It is untested, and the ranges overlap.
+
+---
+
+## Grounded triage — the model re-ranks retrieval's top 10 (2026-10-27)
+
+`/triage/grounded`: retrieval (`fixed_v1_header`) finds 10 candidate files,
+and the structured-triage model gets the issue plus each candidate's path and
+best chunk. It names up to 5 of them in `suspected_files`, most likely first,
+from the list only. Both rankings are scored with the same `score_ranking`,
+from the same candidates, on the fixed 40-row val slice.
+`python -m eval.grounded --n 40`.
+
+The model only sees the top 10, so retrieval's recall@10 is its ceiling.
+recall@1 and MRR were picked in advance as the metrics it could move.
+
+| clean (n=33) | retrieval | claude-haiku-5-5 | qwen2.5-coder:7b |
+|---|---|---|---|
+| **recall@1** | 14.6% | **33.4%** | 14.6% |
+| recall@5 | 49.6% | 49.6% | 26.8% |
+| **MRR** | 34.9% | **50.5%** | 24.2% |
+| ceiling (retrieval recall@10) | 60.9% | | |
+| contract violations | — | 0/40 | 9/40 |
+| rows naming no file | — | 0 | 14 (9 of them violations) |
+| wall clock | ~7s | 293s | 2,517s |
+| cost, 40 rows | $0 | $0.0704 (~$0.0018 each) | $0 |
+
+(The same slice on all rows, n=40: retrieval / Haiku / qwen recall@1
+19.9% / 37.9% / 19.9%, MRR 40.6% / 55.4% / 30.8%.)
+
+**Haiku more than doubles recall@1 and leaves recall@5 untouched.** The
+model doesn't find different files: the right file was already somewhere in
+the top 5, and the model moves it to first. That is exactly the one gain this
+design allowed. At ~$0.0018 a triage, re-ranking is the cheapest
+rank-precision gain measured so far: the header bought +8 points of
+recall@1, this buys +19 on this slice.
+
+**qwen2.5-coder:7b does not re-rank.** Its recall@1 equals retrieval's
+exactly, which looks like it keeps the search order. It names fewer files
+(14 rows with none), and 9 of 40 rows named a path that wasn't among the
+candidates. That is a contract violation, scored zero, and a 500 at the
+route. The 40-point Phase 02 component gap between the two models shows up
+here as the difference between re-ranking and not.
+
+**Caveats.** 40 rows, 33 clean: one row is worth ~3 points, so +19 is a large
+effect on a small sample rather than a precise number. A full 206-row val
+run (~$0.36) would firm it up. File-level, as everywhere in Phase 03.
+
+**The trap this run nearly fell into.** A grounded prompt is ~6.9k tokens.
+Ollama's default context window truncates a longer prompt *from the front*,
+silently. On the first val row it read 2,050 of 6,897 tokens and lost the
+system prompt, so qwen would have scored badly for a reason that had nothing
+to do with qwen. `OLLAMA_NUM_CTX` (default 16384) is now passed on every
+local call, and the numbers above are with the full prompt.
