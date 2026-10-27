@@ -311,3 +311,16 @@ caps it at 54.3%.
 fewer files to choose among, and the issues name intentions rather than
 symptoms, and intentions match file names. With 16 rows each one is worth
 ~6 points. Read it as "did not collapse", not as a comparison.
+
+**Refreshed the same day at a newer pin (172 commits later).** 37 closed
+issues → 28 usable (75.7%), 120 in-scope files, 383 chunks, mean 3.68 gold
+files. recall@1 38.7% (ceiling 43.7%), recall@5 63.3%, **recall@10 71.2%,
+MRR 92.3%**. Recall fell as the fixes grew wider (2.6 → 3.7 files each) and
+the repo doubled. MRR rose: the first right file is almost always at rank 1.
+
+**On its 25 open issues, judged by hand.** Issues that describe code put the
+obvious file first, often at the right lines. Issues that describe process,
+like a beta test, a licensing conversation or a done-criteria review, still get
+five files, because the retriever has no way to abstain. Those had the lowest
+top scores (0.64–0.72, against ~0.75–0.85 for code issues), so a score floor
+is a cheap first abstain signal. It is untested, and the ranges overlap.
