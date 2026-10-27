@@ -27,16 +27,25 @@ def _get(response, key: str, default=None):
     return getattr(response, key, default)
 
 
-def complete(system: str, user: str, *, max_tokens: int | None = None) -> Completion:
-    options = {"num_predict": max_tokens or C.MAX_TOKENS}
+def _options(max_tokens: int | None) -> dict:
+    """num_ctx is not optional once retrieval feeds the prompt.
 
+    Ollama's default context window is a few thousand tokens, and a prompt
+    longer than that is truncated from the FRONT, silently — the system prompt
+    is the first thing lost. A grounded triage is ~5k tokens, so without this
+    the local model would score badly for a reason unrelated to the model.
+    """
+    return {"num_predict": max_tokens or C.MAX_TOKENS, "num_ctx": C.OLLAMA_NUM_CTX}
+
+
+def complete(system: str, user: str, *, max_tokens: int | None = None) -> Completion:
     response = _client.chat(
         model=C.OLLAMA_MODEL,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        options=options,
+        options=_options(max_tokens),
     )
 
     message = _get(response, "message") or {}
@@ -85,7 +94,7 @@ def complete_structured(
         format=S.json_schema(),
         # Structured output is longer than prose; a truncated object is useless
         # where truncated prose is merely short.
-        options={"num_predict": max_tokens or C.MAX_TOKENS},
+        options=_options(max_tokens),
     )
 
     message = _get(response, "message") or {}

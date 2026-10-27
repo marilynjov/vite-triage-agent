@@ -20,6 +20,9 @@ PROVIDER = os.getenv("PROVIDER", "ollama")
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+# Context window for local calls. Ollama's default is small and it truncates
+# an oversized prompt from the front without saying so. See ollama_provider.
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 
 # Haiku 5.5 by default: ~50x cheaper per triage than Opus 5.5 and 10x cheaper
 # than Haiku 4.5. Switch to claude-opus-5-5 for gate runs and for Phase 07's
