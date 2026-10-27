@@ -91,7 +91,7 @@ def complete_structured(
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        format=S.json_schema(),
+        format=S.json_schema(model),
         # Structured output is longer than prose; a truncated object is useless
         # where truncated prose is merely short.
         options=_options(max_tokens),

@@ -68,14 +68,30 @@ class TriageResult(BaseModel):
         return value
 
 
-def json_schema() -> dict[str, Any]:
+class GroundedTriageResult(TriageResult):
+    """Phase 02's result, plus the files the fix touches — chosen from retrieval.
+
+    A subclass, so TriageResult and every Phase 02 number stay exactly as they
+    were. The model is shown retrieval's top candidates and may only pick among
+    them; that rule depends on the request, so it cannot live in a static
+    schema and is checked by api.triage.check_candidates instead.
+
+    Most likely first, because it is scored as a ranking with the same recall@k
+    and MRR as retrieval. Capped at 5: the ceiling is the candidates' own
+    recall@10, so what this can buy is rank, not coverage.
+    """
+
+    suspected_files: list[str] = Field(max_length=5)
+
+
+def json_schema(model: type[BaseModel] = TriageResult) -> dict[str, Any]:
     """The schema both providers send, strict enough for either to accept.
 
     Anthropic's structured outputs and Ollama's grammar both want every property
     required and additionalProperties false. Pydantic emits `maxItems` from
     Field(max_length=...) for lists, which is what stops the rambling above.
     """
-    schema = TriageResult.model_json_schema()
+    schema = model.model_json_schema()
     schema["additionalProperties"] = False
     schema["required"] = sorted(schema["properties"].keys())
     return schema
