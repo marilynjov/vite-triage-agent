@@ -44,10 +44,12 @@ def query_for(row: dict) -> str:
     return f"{row['title']}\n\n{row['body']}"
 
 
-def score_one(row: dict, k_values: list[int], strategy: str) -> dict:
-    gold = set(row["gold_files"])
-    ranked = search.search_files(query_for(row), strategy=strategy, k=max(k_values))
+def score_ranking(ranked: list[str], gold: set[str], k_values: list[int]) -> dict:
+    """recall@k and reciprocal rank for one ranked file list.
 
+    Shared by every ranker — retrieval, and the model re-ranking it in
+    eval/grounded.py — so their numbers are comparable by construction.
+    """
     out: dict[str, float] = {}
     for k in k_values:
         found = gold & set(ranked[:k])
@@ -60,6 +62,11 @@ def score_one(row: dict, k_values: list[int], strategy: str) -> dict:
             break
     out["mrr"] = rr
     return out
+
+
+def score_one(row: dict, k_values: list[int], strategy: str) -> dict:
+    ranked = search.search_files(query_for(row), strategy=strategy, k=max(k_values))
+    return score_ranking(ranked, set(row["gold_files"]), k_values)
 
 
 def main() -> None:

@@ -10,3 +10,6 @@ uvicorn[standard]==0.54.0
 psycopg[binary]==3.3.6
 psycopg-pool==3.3.3
 ollama==0.6.3
+
+# --- tests ---
+pytest==9.1.1
