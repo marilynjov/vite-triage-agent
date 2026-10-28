@@ -266,7 +266,8 @@ async def triage_agent(request: AgentTriageRequest) -> AgentTriageResponse:
     if not candidates:
         raise HTTPException(404, f"no index for {corpus} ({strategy})")
     run_id = uuid.uuid4().hex
-    cutoff = request.created_at or agent_tools.pinned_date()
+    cutoff = (request.created_at.isoformat() if request.created_at
+              else agent_tools.pinned_date())
 
     async def record_turns(run, error: str | None = None) -> None:
         for i, t in enumerate(run.turns, start=1):

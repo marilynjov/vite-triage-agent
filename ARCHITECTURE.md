@@ -247,6 +247,9 @@ The agent gets four read-only tools (`list_dir`, `read_file`, `grep`,
   (`/triage/agent` falls back to the pin's commit date when the request has
   none). Without it the agent could read the answer from the log. A test pins
   this: the fix is absent at the issue's creation time and present after it.
+  The API's default cutoff is the pin date, which is right for a newly filed
+  issue but means replaying an already-fixed issue through the API without
+  `created_at` can show its fix in `git_log`.
 - **The final answer must be in scope.** `check_in_scope` requires every
   `suspected_files` entry to exist at the pin and to pass
   `mining.config.is_gold_candidate`, the same test the labels and the index

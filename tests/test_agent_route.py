@@ -96,3 +96,26 @@ def test_cutoff_defaults_to_the_pin_date(env):
     set_run(loop.Run(result=_result(), turns=[_turn(3)]))
     TestClient(app).post("/triage/agent", json=BODY)
     assert seen["cutoff"] == tools.pinned_date()
+
+
+def test_non_run_error_records_one_error_row_then_500(env):
+    calls, _, set_run = env
+    set_run(exc=Exception("kaboom"))
+    assert TestClient(app).post("/triage/agent", json=BODY).status_code == 500
+    assert len(calls) == 1 and calls[0]["error"] == "kaboom"
+
+
+def test_malformed_created_at_is_422(env):
+    _, seen, set_run = env
+    set_run(loop.Run(result=_result(), turns=[_turn(3)]))
+    r = TestClient(app).post("/triage/agent", json={**BODY, "created_at": "garbage-not-a-date"})
+    assert r.status_code == 422
+    assert "cutoff" not in seen
+
+
+def test_valid_created_at_becomes_the_iso_cutoff(env):
+    _, seen, set_run = env
+    set_run(loop.Run(result=_result(), turns=[_turn(3)]))
+    r = TestClient(app).post("/triage/agent", json={**BODY, "created_at": "2023-07-20T10:52:02Z"})
+    assert r.status_code == 200, r.text
+    assert seen["cutoff"] == "2023-07-20T10:52:02+00:00"

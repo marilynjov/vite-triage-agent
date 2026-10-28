@@ -7,6 +7,8 @@ the backend and the UI share one definition.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from .schema import GroundedTriageResult, ToolCall, TriageResult
@@ -99,7 +101,7 @@ class GroundedTriageResponse(BaseModel):
 
 class AgentTriageRequest(TriageRequest):
     # The agent's tools see the repo as of this date. Omitted means the pin date.
-    created_at: str | None = None
+    created_at: datetime | None = None
 
 
 class AgentTriageResponse(BaseModel):
