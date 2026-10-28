@@ -367,9 +367,18 @@ candidates. That is a contract violation, scored zero, and a 500 at the
 route. The 40-point Phase 02 component gap between the two models shows up
 here as the difference between re-ranking and not.
 
-**Caveats.** 40 rows, 33 clean: one row is worth ~3 points, so +19 is a large
-effect on a small sample rather than a precise number. A full 206-row val
-run (~$0.36) would firm it up. File-level, as everywhere in Phase 03.
+**Caveats.** 40 rows, 33 clean: one row is ~3 points, so the gap between agent
+and grounded (about 3 to 4 rows on clean) is a suggestive size on a small
+sample, not a precise number. The grounded column here differs from the earlier
+40-row run on the same slice and prompt: clean recall@1 33.4% then, 30.4% now
+(3 points, one row, more than a quarter of the 11-point agent-over-grounded
+gap), and clean MRR 50.5% then, 49.5% now. That is the observed difference
+between two runs, not a bound on noise. The tools read code as of the pin,
+after every val fix, as the retrieval index always has: a file the agent finds
+by grep may exist only because the fix for the issue landed, so "found
+outside" is optimistic by an amount this run cannot separate. The `cutoff`
+argument limits git_log, which was never called. File-level, as everywhere in
+Phase 03.
 
 **The trap this run nearly fell into.** A grounded prompt is ~6.9k tokens.
 Ollama's default context window truncates a longer prompt *from the front*,
@@ -409,9 +418,10 @@ Phase 04 must beat.
 
 `PROVIDER=anthropic python -m eval.agent --n 40`. The same 40-row val slice as
 the grounded run. Per row: retrieval's top 10, one grounded call that re-ranks
-them, and the tool-use agent (grep, read_file, list_dir, git_log; the model may
-name a file outside the candidates once a tool confirmed it). All three scored
-by `score_ranking`.
+them, and the tool-use agent (grep, read_file, list_dir, git_log). The prompt
+tells the model it may name a file outside the candidates once a tool confirmed
+it; that is an instruction, not an enforced rule (the code checks only that the
+path exists and passes the scope test). All three scored by `score_ranking`.
 
 | clean (n=33) | retrieval | grounded | agent |
 |---|---|---|---|
@@ -432,7 +442,11 @@ All rows (n=40): recall@1 19.9% / 35.4% / 44.6%, recall@5 54.4% / 56.9% /
 over all rows is 66.5%.
 
 Gold files found outside the candidates: #14009 `cli.ts`, #14151
-`optimizer/scan.ts`, #14537 `plugins/esbuild.ts`.
+`optimizer/scan.ts`, #14537 `plugins/esbuild.ts`. The eval did not record
+per-row tool use, so it cannot say whether each of these three came from a
+tool-using run. One later `agent.explain` run of #14009 did reach `cli.ts` via
+grep and read_file, and another run of it missed: the agent is nondeterministic
+per run.
 
 **The agent beats grounded on recall@1 by 11 points and on MRR by 5, at 1.7x
 the cost.** The spend is small in absolute terms ($0.0029 a triage). But 26 of
