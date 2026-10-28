@@ -207,7 +207,8 @@ chain-of-thought instead of a justification written after the verdict.
 `web/` is Vite + React + TypeScript with `useState` only: no component
 library, no state library, no data-fetching library. It posts to
 `/triage/{naive,structured,agent}` and renders the typed result
-(`/triage/grounded` has no button; the eval and curl use it). CORS allows only
+(`/triage/grounded` has no button; `eval/grounded.py` and
+`eval/agent.py` call `api.triage.triage_grounded` directly). CORS allows only
 `http://localhost:5173`.
 
 ## 7. Agent: tools at the pin, a loop you can read
@@ -233,7 +234,8 @@ The agent gets four read-only tools (`list_dir`, `read_file`, `grep`,
   `--literal-pathspecs`, path arguments to `grep` and `git_log` follow `--`
   (`read_file` and `list_dir` use `<sha>:<path>`, which git cannot read as an
   option), and `grep` passes its pattern with `-e`, so a model-written string
-  is a path or a pattern and never an option. A 30-second timeout bounds a pathological regex.
+  is a path or a pattern and never an option. A 30-second timeout bounds a
+  pathological regex.
 - **Output is capped, and failure is a string.** `read_file` returns at most 400
   lines, `grep` shows at most 50 matches and says how many there were, and any
   result is cut at 20,000 characters. Errors come back as text starting
