@@ -115,3 +115,17 @@ def test_unparseable_final_text_is_a_run_error():
 def test_max_tokens_is_a_run_error():
     with pytest.raises(loop.RunError):
         _run(_resp([NS(type="text", text="{")], "max_tokens"))
+
+
+def test_closing_assistant_turn_is_in_messages():
+    final = _final([CSS])
+    _, run = _run(_resp([_tool("t1", "list_dir", path="packages")]), final)
+    assert len(run.messages) == 4
+    assert run.messages[3] == {"role": "assistant", "content": final.content}
+
+
+def test_rejected_final_answer_is_still_in_the_runerror_messages():
+    final = _final(["packages/vite/src/node/nope.ts"])
+    with pytest.raises(loop.RunError) as err:
+        _run(final)
+    assert err.value.run.messages[-1] == {"role": "assistant", "content": final.content}

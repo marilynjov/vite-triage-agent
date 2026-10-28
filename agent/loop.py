@@ -171,6 +171,8 @@ def run(
             continue
 
         if response.stop_reason == "end_turn":
+            # The closing turn belongs in the history too, even if it is rejected below.
+            out.messages.append({"role": "assistant", "content": response.content})
             text = next((b.text for b in response.content if b.type == "text"), "")
             try:
                 result = GroundedTriageResult.model_validate_json(text)
