@@ -402,3 +402,68 @@ violations 3/206. Cost $0.3603. Wall clock 1,418s. Files named per row,
 which the 40-row run could not show. So on the full set Haiku also pulls gold
 files up from ranks 6–10, not only reordering the top 5. This is the baseline
 Phase 04 must beat.
+
+---
+
+## Phase 04 — tools (2026-10-27)
+
+`PROVIDER=anthropic python -m eval.agent --n 40`. The same 40-row val slice as
+the grounded run. Per row: retrieval's top 10, one grounded call that re-ranks
+them, and the tool-use agent (grep, read_file, list_dir, git_log; the model may
+name a file outside the candidates once a tool confirmed it). All three scored
+by `score_ranking`.
+
+| clean (n=33) | retrieval | grounded | agent |
+|---|---|---|---|
+| **recall@1** | 14.6% | 30.4% | **41.5%** |
+| recall@5 | 49.6% | 49.6% | 55.2% |
+| **MRR** | 34.9% | 49.5% | **54.5%** |
+| ceiling (retrieval recall@10) | 60.9% | | |
+| contract violations | — | 0/40 | 0/40 |
+| gold found outside candidates | — | impossible | 3 rows, 3 files |
+| turns per run | — | 1 | `{1: 26, 2: 10, 3: 1, 4: 1, 5: 1, 6: 1}` |
+| tool calls | — | — | grep 22, read_file 5, list_dir 0, git_log 0 (0 errors) |
+| wall clock | | | 659s for the whole run |
+| cost per triage | $0 | $0.0017 | $0.0029 |
+| cost, 40 rows | $0 | $0.0683 | $0.1146 |
+
+All rows (n=40): recall@1 19.9% / 35.4% / 44.6%, recall@5 54.4% / 56.9% /
+61.1%, MRR 40.6% / 55.4% / 59.6%, for retrieval / grounded / agent. The ceiling
+over all rows is 66.5%.
+
+Gold files found outside the candidates: #14009 `cli.ts`, #14151
+`optimizer/scan.ts`, #14537 `plugins/esbuild.ts`.
+
+**The agent beats grounded on recall@1 by 11 points and on MRR by 5, at 1.7x
+the cost.** The spend is small in absolute terms ($0.0029 a triage). But 26 of
+40 runs finished in one turn with no tool call at all, so some unknown share of
+the lift comes from the agent prompt and request shape rather than from tools,
+and this run does not separate tool rows from no-tool rows. Only 14 rows used
+tools, with 27 calls in total, 22 of them grep and 5 read_file; list_dir and
+git_log were never called. Scoring tool-using and no-tool rows separately would
+separate the effects; a follow-up can do that.
+
+**The new ability is real but small.** The ceiling that bound grounded triage,
+retrieval's recall@10, is no longer a hard limit: in 3 rows the agent named a
+gold file that was not among the 10 candidates, which grounded triage cannot do
+by construction. That is 3 of 40 rows (all rows), so at most ~7 points of
+all-row recall@5 headroom; it is not comparable to the clean-row recall@5 gain
+over grounded (49.6% to 55.2%), which comes from a different row set and may
+include re-ranking as well as these finds.
+
+**No contract violations on either side.** Every agent run ended in a valid
+`GroundedTriageResult` with in-scope paths. The turn limit was never hit
+(max 6 turns).
+
+**Caveats.** 40 rows, 33 clean: one row is ~3 points, so the gap between agent
+and grounded (about 3 to 4 rows on clean) is a suggestive size on a small
+sample, not a precise number. The grounded column here differs from the earlier 40-row run on the
+same slice and prompt: clean recall@1 33.4% then, 30.4% now (3 points, one
+row, more than a quarter of the 11-point agent-over-grounded gap), and clean MRR
+50.5% then, 49.5% now. That is the observed difference between two runs, not a bound on
+noise. The tools read code
+as of the pin, after every val fix, as the retrieval index always has: a file
+the agent finds by grep may exist only because the fix for the issue landed, so
+"found outside" is optimistic by an amount this run cannot separate. The
+`cutoff` argument limits git_log, which was never called. File-level, as
+everywhere in Phase 03.
