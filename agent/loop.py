@@ -25,16 +25,21 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+import anthropic
 from pydantic import ValidationError
 
 from api import config as C
 from api import cost
 from api.providers.base import Completion
-from api.schema import GroundedTriageResult, ToolCall, json_schema
+from api.schema import GroundedTriageResult, ToolCall
 from api.triage import GROUNDED_SYSTEM, grounded_prompt
 from retrieval.search import FileHit
 
 from . import tools
+
+# The SDK's transform strips constraints the API rejects (maxItems, maxLength...).
+# Constrained decoding is not validation: Pydantic still enforces them on the final text.
+OUTPUT_SCHEMA = anthropic.transform_schema(GroundedTriageResult)
 
 AGENT_SYSTEM = GROUNDED_SYSTEM + """
 **Tools**
@@ -131,7 +136,7 @@ def run(
     client: Any = None,
 ) -> Run:
     if client is None:
-        import anthropic  # built lazily so tests and imports never need a key
+        # built here, not at import, so tests never need a key
         client = anthropic.Anthropic()
     max_turns = max_turns or C.AGENT_MAX_TURNS
 
@@ -146,7 +151,7 @@ def run(
             system=AGENT_SYSTEM,
             tools=tools.TOOL_SPECS,
             output_config={"format": {"type": "json_schema",
-                                      "schema": json_schema(GroundedTriageResult)}},
+                                      "schema": OUTPUT_SCHEMA}},
             messages=out.messages,
         )
         out.turns.append(_record_turn(response, int((time.perf_counter() - started) * 1000)))

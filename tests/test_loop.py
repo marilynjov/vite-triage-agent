@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace as NS
 
+import anthropic
 import pytest
 
 from agent import loop, tools
@@ -91,7 +92,9 @@ def test_every_request_carries_tools_and_the_output_schema():
     assert len(client.calls) == 2
     for kw in client.calls:
         assert kw["tools"] == tools.TOOL_SPECS
-        assert kw["output_config"]["format"]["schema"] == S.json_schema(S.GroundedTriageResult)
+        schema = kw["output_config"]["format"]["schema"]
+        assert schema == anthropic.transform_schema(S.GroundedTriageResult)
+        assert "'maxItems'" not in str(schema)  # as a key; the SDK moves it into a description
 
 
 def test_turn_limit_raises_with_the_partial_run():
