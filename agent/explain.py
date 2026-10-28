@@ -34,24 +34,53 @@ def _clip(text: Any, n: int = 70) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def _block_line(block: Any) -> str:
+LEGEND = """HOW TO READ THIS
+  [0]            the caller's first user message (a plain string).
+  assistant [k]  response.content appended whole by the loop after API call k.
+  user [k+1]     the loop's tool results: one tool_result per tool_use, matched
+                 by id, all in ONE user message.
+  A missing tool_result for any tool_use id makes the next API call fail.
+"""
+
+FOOTER = "tool_result text clipped to 60 chars; --json has it in full"
+
+
+def _short_id(tid: Any) -> str:
+    tid = str(tid)
+    return tid if len(tid) <= 14 else tid[:13] + "…"
+
+
+def _block_line(block: Any, uses: dict) -> str:
     kind = _field(block, "type")
     if kind == "tool_use":
         return (f"tool_use {_field(block, 'id')} {_field(block, 'name')}  "
                 f"input={_clip(json.dumps(_field(block, 'input', {})), 60)}")
     if kind == "tool_result":
-        return (f"tool_result {_field(block, 'tool_use_id')}  "
+        tid = _field(block, "tool_use_id")
+        idx, name = uses.get(tid, ("?", "?"))
+        return (f"tool_result {_short_id(tid)} {name}  answers [{idx}]  "
                 f"is_error={_field(block, 'is_error', False)}  "
-                f"content={_clip(_field(block, 'content', ''), 60)}")
+                f'"{_clip(_field(block, "content", ""), 60)}"')
     if kind == "thinking":
-        return f"thinking  {_clip(_field(block, 'thinking', ''))}"
+        text = _field(block, "thinking", "")
+        if text:
+            return f"thinking  {_clip(text)}"
+        sig = _field(block, "signature")
+        extra = f", signature {len(sig)} chars" if sig else ""
+        return f"thinking  (text hidden by the API; resent unchanged{extra})"
     if kind == "text":
         return f"text  {_clip(_field(block, 'text', ''))}"
     return str(kind)
 
 
 def format_transcript(messages: list, turns: list[Turn]) -> str:
-    lines: list[str] = []
+    uses: dict[str, tuple[int, str]] = {}
+    for i, msg in enumerate(messages):
+        if msg["role"] == "assistant" and not isinstance(msg["content"], str):
+            for blk in msg["content"]:
+                if _field(blk, "type") == "tool_use":
+                    uses[_field(blk, "id")] = (i, _field(blk, "name"))
+    lines: list[str] = [LEGEND]
     api_call = 0
     for i, msg in enumerate(messages):
         role = msg["role"]
@@ -61,7 +90,7 @@ def format_transcript(messages: list, turns: list[Turn]) -> str:
             lines.append(f"      text  {_clip(content, 90)}")
             continue
         for block in content:
-            lines.append(f"      {_block_line(block)}")
+            lines.append(f"      {_block_line(block, uses)}")
         if role == "assistant":
             if api_call < len(turns):
                 t = turns[api_call]
@@ -71,6 +100,8 @@ def format_transcript(messages: list, turns: list[Turn]) -> str:
                     f"cache_read={t.cache_read_input_tokens} "
                     f"stop_reason={t.stop_reason} cost=${t.cost_usd}")
             api_call += 1
+    lines.append("")
+    lines.append(FOOTER)
     return "\n".join(lines)
 
 
