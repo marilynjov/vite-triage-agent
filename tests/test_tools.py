@@ -86,9 +86,36 @@ def test_execute_unknown_tool_is_an_error():
     assert tools.execute("rm", {}, cutoff="2030-01-01")[1] is True
 
 
-def test_execute_truncates_long_output():
+def test_execute_truncates_long_output(monkeypatch):
+    monkeypatch.setattr(tools, "MAX_CHARS", 100)
     out, is_error = tools.execute("grep", {"pattern": ".", "path": "packages/vite/src"}, cutoff="2030-01-01")
-    assert not is_error and len(out) <= 20_000 + len("\n… [truncated]")
+    assert not is_error
+    assert out.endswith("[truncated]")
+    assert len(out) <= 100 + len("\n… [truncated]")
+
+
+def test_split_lines_splits_on_newline_only():
+    assert tools._split_lines("a\x0cb\nc\u2028d\n") == ["a\x0cb", "c\u2028d"]
+    assert tools._split_lines("") == []
+
+
+def test_grep_line_numbers_agree_with_read_file():
+    hit = tools.grep("export default", CSS).splitlines()[1]
+    _, n, text = hit.split(":", 2)
+    assert f"\n{n}: {text}" in tools.read_file(CSS, max(1, int(n) - 1), int(n) + 1)
+
+
+def test_git_times_out_as_error(monkeypatch):
+    monkeypatch.setattr(tools, "GIT_TIMEOUT", 0.001)
+    out, is_error = tools.execute("grep", {"pattern": "."}, cutoff="2030-01-01")
+    assert is_error and "timed out after" in out
+
+
+def test_pathspec_magic_is_literal():
+    g = tools.grep("import", ":(top)packages")
+    assert g == "showing 0 of 0 matches" or g.startswith("Error: ")
+    log = tools.git_log(":(top)packages", cutoff="2030-01-01")
+    assert log.startswith(("Error: ", "No commits"))
 
 
 def test_tool_specs_are_strict():

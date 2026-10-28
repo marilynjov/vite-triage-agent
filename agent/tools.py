@@ -27,6 +27,7 @@ MAX_LINES = 400
 MAX_MATCHES = 50
 MAX_CHARS = 20_000
 MAX_LOG = 30
+GIT_TIMEOUT = 30
 
 
 @lru_cache(maxsize=1)
@@ -36,10 +37,21 @@ def pinned_sha() -> str:
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     # check=False: a nonzero exit is information (no match, bad path), not a crash.
+    # --literal-pathspecs: a model-supplied path is a path, never `:(top)` magic or a glob.
+    # The timeout keeps a pathological regex from hanging a run; execute() reports it.
     return subprocess.run(
-        ["git", "-C", str(M.REPO_PATH), *args],
+        ["git", "--literal-pathspecs", "-C", str(M.REPO_PATH), *args],
         capture_output=True, text=True, errors="replace", check=False,
+        timeout=GIT_TIMEOUT,
     )
+
+
+def _split_lines(text: str) -> list[str]:
+    """Split on \\n only, as `git grep -n` counts, so grep hits and read_file agree."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 @lru_cache(maxsize=1)
@@ -91,7 +103,7 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
     r = _git("show", f"{pinned_sha()}:{p}")
     if "\x00" in r.stdout:
         return f"Error: {p!r} is a binary file"
-    lines = r.stdout.splitlines()
+    lines = _split_lines(r.stdout)
     total = len(lines)
     if start_line < 1:
         return f"Error: start_line must be >= 1, got {start_line}"
@@ -189,6 +201,8 @@ def execute(name: str, tool_input: dict, *, cutoff: str) -> tuple[str, bool]:
                           cutoff=cutoff)
         else:
             out = f"Error: unknown tool {name!r}"
+    except subprocess.TimeoutExpired:
+        out = f"Error: git timed out after {GIT_TIMEOUT}s"
     except Exception as e:  # a tool failure must reach the model, not kill the loop
         out = f"Error: {type(e).__name__}: {e}"
     if len(out) > MAX_CHARS:
