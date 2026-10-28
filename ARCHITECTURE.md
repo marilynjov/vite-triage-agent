@@ -56,11 +56,11 @@ the model open files before it answers (section 7). It is scored by
 | `web/` | one React page over the API | `api/` over HTTP |
 | `scripts/` | `gen_types.py`: Pydantic → TypeScript | `api/schema.py` |
 
-Dependencies point one way: `mining ← retrieval ← agent ← eval / api`.
-`mining/` imports nothing from the rest, so ground truth can't be shaped by the
-code it grades. `agent/` borrows the grounded prompt, cost and schema from
-`api/` but never imports a route, and `api/main.py` imports `agent/` only for
-the one route that runs it.
+There is no module-level import cycle. `mining/` imports nothing from the
+rest, so ground truth can't be shaped by the code it grades. `agent/` depends
+on `api/`'s contract, prompt and cost modules (`schema`, `triage`, `cost`,
+`config`, `providers.base`). `api/main.py` imports `agent/` for one route. The
+agent's CLIs (`explain`, `runner`) import `eval.retrieve` for `query_for`.
 
 ---
 
@@ -161,7 +161,10 @@ route ─► triage.py (owns the prompt) ─► providers.complete[_structured] 
   selected once by `PROVIDER`. Ollama (`qwen2.5-coder:7b`) is the default and
   free. Anthropic (Haiku by default) costs money and is where gate numbers are
   quoted from. Both return the same `Completion`, so nothing downstream
-  branches on provider except pricing.
+  branches on provider except pricing. The agent is the exception:
+  `/triage/agent` returns 400 unless `PROVIDER=anthropic`, and the loop calls
+  the Anthropic SDK directly, because tool use is written against the Messages
+  API's own message array.
 - **`calls` table.** One row per model call, written on success *and*
   failure. Cache-token columns have existed since day one, so Phase 07's
   caching gate needs no migration. `GET /calls` reads it back.
@@ -203,7 +206,8 @@ chain-of-thought instead of a justification written after the verdict.
 
 `web/` is Vite + React + TypeScript with `useState` only: no component
 library, no state library, no data-fetching library. It posts to
-`/triage/{naive,structured}` and renders the typed result. CORS allows only
+`/triage/{naive,structured,agent}` and renders the typed result
+(`/triage/grounded` has no button; the eval and curl use it). CORS allows only
 `http://localhost:5173`.
 
 ## 7. Agent: tools at the pin, a loop you can read
@@ -226,12 +230,13 @@ The agent gets four read-only tools (`list_dir`, `read_file`, `grep`,
   checked out.
 - **Paths are sandboxed before git sees them.** A path is normalised and
   rejected if it is absolute, starts with `-`, or contains `..`. Git runs with
-  `--literal-pathspecs`, user paths come after `--`, and `grep` passes its
-  pattern with `-e`, so a model-written string is a path or a pattern and
-  never an option. A 30-second timeout bounds a pathological regex.
+  `--literal-pathspecs`, path arguments to `grep` and `git_log` follow `--`
+  (`read_file` and `list_dir` use `<sha>:<path>`, which git cannot read as an
+  option), and `grep` passes its pattern with `-e`, so a model-written string
+  is a path or a pattern and never an option. A 30-second timeout bounds a pathological regex.
 - **Output is capped, and failure is a string.** `read_file` returns at most 400
-  lines, `grep` shows at most 50 matches and says how many there were, and no
-  result exceeds 20,000 characters. Errors come back as text starting
+  lines, `grep` shows at most 50 matches and says how many there were, and any
+  result is cut at 20,000 characters. Errors come back as text starting
   `Error: `, so the model can recover. `execute` never raises, and it sets
   `is_error` on the `tool_result`.
 - **`git_log` has a cutoff the model never sees.** At the pin, history contains
@@ -311,7 +316,8 @@ migration.
 
 - **No agent framework** (LangChain, LangGraph). Every layer here is something
   to explain and measure, and a framework that owns the loop hides exactly
-  that. The SDK's own tool runner is kept as a comparison only (section 7). If one is ever added, Phase 06's staged workflow is where it belongs.
+  that. The SDK's own tool runner is kept as a comparison only (section 7).
+  If one is ever added, Phase 06's staged workflow is where it belongs.
 - **No ORM, no registry of providers, no component library.** Each would
   hide something that is currently worth reading.
 - **No BM25 fusion, no abstain, no retrieval inspector yet.** All deferred
