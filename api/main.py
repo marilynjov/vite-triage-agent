@@ -6,16 +6,20 @@ from __future__ import annotations
 
 from decimal import Decimal
 import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 
+from agent import loop as agent_loop, tools as agent_tools
 from retrieval import config as R, search
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 from . import config as C, cost, db, triage
 from .models import (
+    AgentTriageRequest,
+    AgentTriageResponse,
     GroundedTriageResponse,
     RetrievedFile,
     RetrieveRequest,
@@ -240,6 +244,91 @@ async def triage_grounded(request: TriageRequest) -> GroundedTriageResponse:
         output_tokens=completion.output_tokens,
         latency_ms=latency_ms,
         cost_usd=float(cost_usd),
+    )
+
+
+@app.post("/triage/agent", response_model=AgentTriageResponse)
+async def triage_agent(request: AgentTriageRequest) -> AgentTriageResponse:
+    """Retrieval, then a tool-using agent that may open files before answering.
+
+    One `calls` row per API turn, all sharing a run_id, so a run's cost is a
+    GROUP BY. A failed run still records the turns it paid for, the last one
+    carrying the error.
+    """
+    if C.PROVIDER != "anthropic":
+        raise HTTPException(400, "/triage/agent needs PROVIDER=anthropic (tool use is Claude-only)")
+    corpus, strategy = R.CORPUS, R.DEFAULT_STRATEGY
+    started = time.perf_counter()
+    candidates = await run_in_threadpool(
+        search.search_ranked, f"{request.title}\n\n{request.body}",
+        strategy=strategy, k=C.GROUNDED_K, corpus=corpus,
+    )
+    if not candidates:
+        raise HTTPException(404, f"no index for {corpus} ({strategy})")
+    run_id = uuid.uuid4().hex
+    cutoff = request.created_at or agent_tools.pinned_date()
+
+    async def record_turns(run, error: str | None = None) -> None:
+        for i, t in enumerate(run.turns, start=1):
+            await db.record_call(
+                endpoint="/triage/agent",
+                provider="anthropic",
+                model=C.ANTHROPIC_MODEL,
+                issue_number=request.issue_number,
+                usage=t,
+                latency_ms=t.latency_ms,
+                cost_usd=t.cost_usd,
+                stop_reason=t.stop_reason,
+                request_id=t.request_id,
+                error=error if i == len(run.turns) else None,
+                run_id=run_id,
+                turn=i,
+            )
+
+    try:
+        run = await run_in_threadpool(
+            agent_loop.run, request.title, request.body, candidates, cutoff
+        )
+    except Exception as exc:
+        failed = getattr(exc, "run", None)
+        if failed is not None and failed.turns:
+            await record_turns(failed, str(exc))
+        else:
+            await db.record_call(
+                endpoint="/triage/agent",
+                provider="anthropic",
+                model=C.ANTHROPIC_MODEL,
+                issue_number=request.issue_number,
+                usage=None,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                cost_usd=Decimal("0"),
+                stop_reason=None,
+                request_id=None,
+                error=str(exc),
+                run_id=run_id,
+                turn=1,
+            )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    await record_turns(run)
+    return AgentTriageResponse(
+        result=run.result,
+        candidates=[
+            RetrievedFile(path=f.path, score=round(f.score, 4), start_line=f.best.start_line,
+                          end_line=f.best.end_line, snippet=f.best.text)
+            for f in candidates
+        ],
+        trace=run.trace,
+        turns=len(run.turns),
+        run_id=run_id,
+        corpus=corpus,
+        strategy=strategy,
+        model=C.ANTHROPIC_MODEL,
+        provider="anthropic",
+        input_tokens=run.input_tokens,
+        output_tokens=run.output_tokens,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        cost_usd=float(run.cost_usd),
     )
 
 

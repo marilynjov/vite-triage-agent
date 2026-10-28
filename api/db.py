@@ -60,6 +60,8 @@ async def record_call(
     stop_reason: str | None,
     request_id: str | None,
     error: str | None = None,
+    run_id: str | None = None,
+    turn: int | None = None,
 ) -> int:
     """Insert one row into `calls` and return its id.
     """
@@ -86,9 +88,11 @@ async def record_call(
                     cost_usd,
                     stop_reason,
                     request_id,
-                    error
+                    error,
+                    run_id,
+                    turn
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -105,6 +109,8 @@ async def record_call(
                     stop_reason,
                     request_id,
                     error,
+                    run_id,
+                    turn,
                 ),
             )
         ).fetchone()

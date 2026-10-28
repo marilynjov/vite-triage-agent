@@ -23,6 +23,10 @@ create table if not exists calls (
     error                       text
 );
 
+-- Phase 04: an agent run is several API calls. run_id groups them, turn orders them.
+alter table calls add column if not exists run_id text;
+alter table calls add column if not exists turn integer;
+
 create index if not exists calls_created_at_idx on calls (created_at desc);
 
 -- Phase 03 --------------------------------------------------------------
