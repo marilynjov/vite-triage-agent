@@ -94,10 +94,11 @@ def run_with_runner(title: str, body: str, candidates: list[FileHit], cutoff: st
     for message in runner:
         last = message
         turns.append(_record_turn(message, 0))
-    # The runner appends the final assistant message to its history only when it
-    # continues; on the closing turn it does not, so add it for a complete array.
+    # On a closing end_turn the runner returns before appending that assistant
+    # message, so add it for a complete array. At a max_iterations stop the runner
+    # has already appended the last assistant message and its tool results.
     messages = list(runner._params["messages"])
-    if last is not None:
+    if last is not None and last.stop_reason == "end_turn":
         messages.append({"role": "assistant", "content": last.content})
     result = None
     if last is not None and last.stop_reason == "end_turn":
