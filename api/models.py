@@ -7,9 +7,11 @@ the backend and the UI share one definition.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
-from .schema import GroundedTriageResult, TriageResult
+from .schema import GroundedTriageResult, ToolCall, TriageResult
 
 
 class TriageRequest(BaseModel):
@@ -88,6 +90,30 @@ class GroundedTriageResponse(BaseModel):
     corpus: str
     strategy: str
     call_id: int
+    model: str
+    provider: str
+    input_tokens: int
+    output_tokens: int
+    latency_ms: int
+    cost_usd: float
+
+
+
+class AgentTriageRequest(TriageRequest):
+    # The agent's tools see the repo as of this date. Omitted means the pin date.
+    created_at: datetime | None = None
+
+
+class AgentTriageResponse(BaseModel):
+    """Grounded triage by a tool-using agent. `trace` is what it looked at."""
+
+    result: GroundedTriageResult
+    candidates: list[RetrievedFile]
+    trace: list[ToolCall]
+    turns: int
+    run_id: str
+    corpus: str
+    strategy: str
     model: str
     provider: str
     input_tokens: int

@@ -26,17 +26,21 @@ what the fix actually touched. That one constraint explains most of the design.
   issue text ──► retrieval.search ──► ranked files ──► POST /retrieve, CLI, eval   │
             │                            │ top 10 as candidates                    │
             │                            ▼                                         │
-            └──► api.triage ──► providers ──► (Grounded)TriageResult ──► /triage/* │
-                                                   │                               │
-                                                   └──► Postgres `calls` (every    │
-                                                        model call, incl. failures)│
+            ├──► api.triage ──► providers ──► (Grounded)TriageResult ──► /triage/* │
+            │                                       │                              │
+            └──► agent.loop ⇄ agent.tools (git @ pin) ──► GroundedTriageResult     │
+                 (/triage/agent)                    │                              │
+                                                    └──► Postgres `calls` (every   │
+                                                         model call, incl. failures│
                     └──────────────────────────────────────────────────────────────┘
 ```
 
 `/triage/naive` and `/triage/structured` see only the issue. `/triage/grounded`
 first retrieves the top 10 files and asks the model to pick, from those only,
 the ones the fix touches. It is scored by `eval/grounded.py` against retrieval
-alone on the same rows.
+alone on the same rows. `/triage/agent` starts from the same candidates but lets
+the model open files before it answers (section 7). It is scored by
+`eval/agent.py`.
 
 ---
 
@@ -46,13 +50,17 @@ alone on the same rows.
 |---|---|---|
 | `mining/` | issue → fix labels, the pinned SHA, the temporal split | git, GitHub REST |
 | `retrieval/` | chunking, embedding, the `chunks` table, search | Ollama (embeddings), Postgres |
-| `eval/` | scoring: `retrieve` (recall@k, MRR), `grounded` (model re-rank vs retrieval), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `api/` |
-| `api/` | FastAPI routes, prompts, the provider seam, cost, the `calls` table | `retrieval/`, providers, Postgres |
+| `eval/` | scoring: `retrieve` (recall@k, MRR), `grounded` (model re-rank vs retrieval), `agent` (retrieval vs grounded vs agent), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `agent/`, `api/` |
+| `agent/` | the four git tools, the tool-use loop, the SDK-runner comparison, `explain` (prints a run's message array) | `api/` (prompt, cost, schema), `retrieval/`, git |
+| `api/` | FastAPI routes, prompts, the provider seam, cost, the `calls` table | `retrieval/`, `agent/`, providers, Postgres |
 | `web/` | one React page over the API | `api/` over HTTP |
 | `scripts/` | `gen_types.py`: Pydantic → TypeScript | `api/schema.py` |
 
-Dependencies point one way: `mining ← retrieval ← eval / api`. `mining/` imports
-nothing from the rest, so ground truth can't be shaped by the code it grades.
+There is no module-level import cycle. `mining/` imports nothing from the
+rest, so ground truth can't be shaped by the code it grades. `agent/` depends
+on `api/`'s contract, prompt and cost modules (`schema`, `triage`, `cost`,
+`config`, `providers.base`). `api/main.py` imports `agent/` for one route. The
+agent's CLIs (`explain`, `runner`) import `eval.retrieve` for `query_for`.
 
 ---
 
@@ -130,6 +138,11 @@ who ordered them. The model can't beat retrieval's recall@10 (it only sees the
 top 10), so recall@1 and MRR are what it can move. A contract violation scores
 zero.
 
+`eval/agent.py` scores three rankings on the same rows with the same
+`score_ranking`: retrieval, grounded and agent. The agent may name a file
+outside the candidates, so it also reports the gold files only it could have
+found. A failed run scores zero, as it is a 500 in production.
+
 `eval/classify.py` scores Phase 02 output against GitHub labels (severity
 from `p2`/`p3`/`p4`, components from `feat: *`). It always prints the
 majority-class baseline, because a constant answer once beat a real prompt.
@@ -148,7 +161,10 @@ route ─► triage.py (owns the prompt) ─► providers.complete[_structured] 
   selected once by `PROVIDER`. Ollama (`qwen2.5-coder:7b`) is the default and
   free. Anthropic (Haiku by default) costs money and is where gate numbers are
   quoted from. Both return the same `Completion`, so nothing downstream
-  branches on provider except pricing.
+  branches on provider except pricing. The agent is the exception:
+  `/triage/agent` returns 400 unless `PROVIDER=anthropic`, and the loop calls
+  the Anthropic SDK directly, because tool use is written against the Messages
+  API's own message array.
 - **`calls` table.** One row per model call, written on success *and*
   failure. Cache-token columns have existed since day one, so Phase 07's
   caching gate needs no migration. `GET /calls` reads it back.
@@ -190,8 +206,94 @@ chain-of-thought instead of a justification written after the verdict.
 
 `web/` is Vite + React + TypeScript with `useState` only: no component
 library, no state library, no data-fetching library. It posts to
-`/triage/{naive,structured}` and renders the typed result. CORS allows only
+`/triage/{naive,structured,agent}` and renders the typed result
+(`/triage/grounded` has no button; `eval/grounded.py` and
+`eval/agent.py` call `api.triage.triage_grounded` directly). CORS allows only
 `http://localhost:5173`.
+
+## 7. Agent: tools at the pin, a loop you can read
+
+```
+issue ─► retrieval top 10 ─► agent.loop.run ─► messages.create ─┐
+                               ▲                                 │ stop_reason
+                               │ ONE user message of results     ▼
+                          agent.tools.execute ◄── tool_use ── end_turn ─► validate ─► check_in_scope
+                          (git @ pinned SHA)
+```
+
+The agent gets four read-only tools (`list_dir`, `read_file`, `grep`,
+`git_log`) and the grounded candidates as a starting point, not a boundary.
+`/triage/agent` needs `PROVIDER=anthropic`, because the loop uses tool use.
+
+- **Tools read git, not the working tree.** Each one calls `git show`,
+  `git grep <sha>`, `git ls-tree` or `git log` against the pinned SHA. The
+  model sees the commit the index and labels describe, whatever the clone has
+  checked out.
+- **Paths are sandboxed before git sees them.** A path is normalised and
+  rejected if it is absolute, starts with `-`, or contains `..`. Git runs with
+  `--literal-pathspecs`, path arguments to `grep` and `git_log` follow `--`
+  (`read_file` and `list_dir` use `<sha>:<path>`, which git cannot read as an
+  option), and `grep` passes its pattern with `-e`, so a model-written string
+  is a path or a pattern and never an option. A 30-second timeout bounds a
+  pathological regex.
+- **Output is capped, and failure is a string.** `read_file` returns at most 400
+  lines, `grep` shows at most 50 matches and says how many there were, and any
+  result is cut at 20,000 characters. Errors come back as text starting
+  `Error: `, so the model can recover. `execute` never raises, and it sets
+  `is_error` on the `tool_result`.
+- **`git_log` has a cutoff the model never sees.** At the pin, history contains
+  the real fix: for issue #13907 it is commit #13909. `git_log` runs with
+  `--before=<cutoff>`, where the caller passes the issue's `created_at`
+  (`/triage/agent` falls back to the pin's commit date when the request has
+  none). Without it the agent could read the answer from the log. A test pins
+  this: the fix is absent at the issue's creation time and present after it.
+  The API's default cutoff is the pin date, which is right for a newly filed
+  issue but means replaying an already-fixed issue through the API without
+  `created_at` can show its fix in `git_log`.
+- **The final answer must be in scope.** `check_in_scope` requires every
+  `suspected_files` entry to exist at the pin and to pass
+  `mining.config.is_gold_candidate`, the same test the labels and the index
+  use. A file outside the candidates is fine once it passes. A made-up path is
+  a rejected run.
+- **Post-fix-code caveat.** The tools read code as of the pin, which is after
+  every val fix. The agent can open a file in its already-fixed state. Retrieval
+  has always had the same property, because the index is built from the same
+  snapshot. Only `git_log` is cut off by date, so the agent does not get a
+  cleaner view of the code than retrieval does, and this is not fixed here.
+
+The loop in `agent/loop.py` is written by hand against `messages.create` so the
+conversation can be read top to bottom:
+
+- **`stop_reason` decides everything.** `tool_use` runs every requested tool
+  and sends the next call. `end_turn` means the text block is the final JSON,
+  which is validated and then checked for scope. Any other value is a
+  `RunError`.
+- **History is append-only.** The assistant message is `response.content`
+  appended whole, thinking blocks included. Haiku 5.5 thinks by default, and a
+  resent thinking block is rejected if anything before it changed.
+- **One user message per turn.** Every `tool_use` needs a `tool_result` with
+  the matching id, and all results for one response travel together. The
+  trace keeps the first 2,000 characters of each output; the model gets the
+  whole capped result.
+- **`AGENT_MAX_TURNS` stops a model that never finishes** (default 12).
+- **`RunError` carries the partial run.** A rejected answer, an unexpected
+  `stop_reason` and an exhausted turn limit all raise it with `.run` attached,
+  so the turns already paid for still get recorded.
+- **The output schema is transformed, then enforced.** The API rejects
+  constraints like `maxItems`, so `OUTPUT_SCHEMA` goes through
+  `anthropic.transform_schema`. Constrained decoding is not validation, so
+  Pydantic still checks the final text, as in section 5.
+
+Accounting follows the same rule as section 4. A run is several API calls, and
+`/triage/agent` writes one `calls` row per turn. The rows share a `run_id` and
+carry `turn`, so a run's cost is a `GROUP BY`. A failed run still records its
+turns, with the error on the last one.
+
+`agent/explain.py` prints a run's message array turn by turn, which is the
+quickest way to see the append-only rule. `agent/runner.py` drives the same
+four functions with the SDK's `tool_runner`. It is a comparison on three
+issues, not a production path; what it did and didn't do for us is in
+[`docs/phase-04-runner.md`](docs/phase-04-runner.md).
 
 ---
 
@@ -219,7 +321,8 @@ migration.
 
 - **No agent framework** (LangChain, LangGraph). Every layer here is something
   to explain and measure, and a framework that owns the loop hides exactly
-  that. If one is ever added, Phase 06's staged workflow is where it belongs.
+  that. The SDK's own tool runner is kept as a comparison only (section 7).
+  If one is ever added, Phase 06's staged workflow is where it belongs.
 - **No ORM, no registry of providers, no component library.** Each would
   hide something that is currently worth reading.
 - **No BM25 fusion, no abstain, no retrieval inspector yet.** All deferred
@@ -230,7 +333,6 @@ migration.
 
 | Phase | Attaches at |
 |---|---|
-| 04 Tools | new `read_file`/`grep`/`list_dir`/`git_log`, sandboxed to `REPO_PATH` at the pinned SHA, the same snapshot the index and labels describe |
-| 05 Agent loop | sits above the provider seam. Step, token, time and dollar limits come from the same `Completion` accounting that feeds `calls`. Graded with the same recall@k as retrieval, for the A/B |
+| 05 Agent loop | budgets wrap `agent.loop.run`: turns already have a limit, and token, time and dollar limits can read the per-turn `Turn` accounting that feeds `calls`. SSE streams from the per-turn loop. The A/B is `eval/agent.py`, scored with the same `score_ranking` as retrieval |
 | 06 Workflow | each stage gets a typed output in the style of `TriageResult` |
 | 07 Production | cache columns in `calls`, nightly `eval.retrieve`, the test split, the second corpus as a held-out generalization check |

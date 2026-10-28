@@ -84,6 +84,19 @@ class GroundedTriageResult(TriageResult):
     suspected_files: list[str] = Field(max_length=5)
 
 
+class ToolCall(BaseModel):
+    """One tool call the agent made: what it asked, what came back, how long it took."""
+
+    model_config = {"extra": "forbid"}
+
+    turn: int
+    name: str
+    input: dict[str, Any]
+    output: str = Field(max_length=2000)  # a preview; the full output went to the model
+    is_error: bool
+    duration_ms: int
+
+
 def json_schema(model: type[BaseModel] = TriageResult) -> dict[str, Any]:
     """The schema both providers send, strict enough for either to accept.
 

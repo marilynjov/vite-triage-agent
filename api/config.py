@@ -37,6 +37,9 @@ MAX_TOKENS = int(os.getenv("MAX_TOKENS", "16000"))
 # recall@10 that bounds what the model can find.
 GROUNDED_K = int(os.getenv("GROUNDED_K", "10"))
 
+# Runaway guard for the tool-use loop: the most API calls one triage may make.
+AGENT_MAX_TURNS = int(os.getenv("AGENT_MAX_TURNS", "12"))
+
 SCHEMA_SQL = Path(__file__).resolve().parent / "schema.sql"
 
 

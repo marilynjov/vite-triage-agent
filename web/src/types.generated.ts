@@ -52,6 +52,11 @@ export type SuspectedFiles =
   | [string, string, string]
   | [string, string, string, string]
   | [string, string, string, string, string];
+export type Turn = number;
+export type Name = string;
+export type Output = string;
+export type IsError = boolean;
+export type DurationMs = number;
 
 /**
  * What a maintainer concludes from reading a bug report, as data.
@@ -63,4 +68,21 @@ export interface TriageResult {
   suspected_components: SuspectedComponents;
   reproduction_steps: ReproductionSteps;
   confidence: Confidence;
+}
+/**
+ * One tool call the agent made: what it asked, what came back, how long it took.
+ *
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "ToolCall".
+ */
+export interface ToolCall {
+  turn: Turn;
+  name: Name;
+  input: Input;
+  output: Output;
+  is_error: IsError;
+  duration_ms: DurationMs;
+}
+export interface Input {
+  [k: string]: unknown;
 }
