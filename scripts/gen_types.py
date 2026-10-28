@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "web" / "src" / "types.generated.ts"
 
 sys.path.insert(0, str(ROOT))
-from api.schema import GroundedTriageResult, TriageResult  # noqa: E402
+from api.schema import GroundedTriageResult, ToolCall, TriageResult  # noqa: E402
 
 
 def main() -> None:
@@ -38,7 +38,9 @@ def main() -> None:
                 {"type": "object", "properties": added, "required": sorted(added),
                  "additionalProperties": False},
             ],
-        }
+        },
+        # Not reachable from TriageResult; emitted the same way so the UI can import it.
+        "ToolCall": ToolCall.model_json_schema(),
     }
 
     try:
