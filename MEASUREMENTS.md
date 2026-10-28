@@ -377,3 +377,28 @@ silently. On the first val row it read 2,050 of 6,897 tokens and lost the
 system prompt, so qwen would have scored badly for a reason that had nothing
 to do with qwen. `OLLAMA_NUM_CTX` (default 16384) is now passed on every
 local call, and the numbers above are with the full prompt.
+
+---
+
+## Grounded triage on the full val split (2026-10-27)
+
+`PROVIDER=anthropic python -m eval.grounded --n 206`. The same design as the
+40-row run above: retrieval's top 10, the model names up to 5, both scored with
+`score_ranking`. This is every val row, not a slice.
+
+| clean (n=175) | retrieval | claude-haiku-5-5 |
+|---|---|---|
+| **recall@1** | 24.1% | **44.5%** |
+| recall@5 | 54.0% | 58.8% |
+| **MRR** | 43.8% | **59.5%** |
+| ceiling (retrieval recall@10) | 68.5% | |
+
+All rows (n=206): recall@1 26.1% → 47.5%, MRR 46.4% → 62.8%. Contract
+violations 3/206. Cost $0.3603. Wall clock 1,418s. Files named per row,
+`{0: 6, 1: 48, 2: 60, 3: 77, 4: 5, 5: 10}`.
+
+**The 40-row result holds, and strengthens on the full split.** recall@1 gains
++20.4 points, against +19 on the slice. recall@5 also rises about 5 points,
+which the 40-row run could not show. So on the full set Haiku also pulls gold
+files up from ranks 6–10, not only reordering the top 5. This is the baseline
+Phase 04 must beat.
