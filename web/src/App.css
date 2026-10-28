@@ -296,8 +296,8 @@ button.secondary {
 }
 
 .trace-error {
-  background: var(--accent-bg);
-  outline: 1px solid var(--accent-border);
+  background: rgba(217, 83, 79, 0.12);
+  outline: 1px solid #d9534f;
 }
 
 .trace details pre {

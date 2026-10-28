@@ -136,6 +136,8 @@ function AgentPanel({ a }: { a: AgentResponse }) {
     ['run', a.run_id],
   ]
   const retrieved = new Set(a.candidates.map((c) => c.path))
+  const looked = (f: string) =>
+    a.trace.some((t) => JSON.stringify(t.input).includes(f) || t.output.includes(f))
   return (
     <>
       <dl className="meters">
@@ -154,8 +156,12 @@ function AgentPanel({ a }: { a: AgentResponse }) {
           {a.result.suspected_files.map((f) => (
             <li key={f} className="mono">
               {f}{' '}
-              <span className={retrieved.has(f) ? 'tag' : 'tag found'}>
-                {retrieved.has(f) ? 'in candidates' : 'found by looking'}
+              <span className={retrieved.has(f) ? 'tag' : looked(f) ? 'tag found' : 'tag'}>
+                {retrieved.has(f)
+                  ? 'in candidates'
+                  : looked(f)
+                    ? 'found by looking'
+                    : 'outside candidates'}
               </span>
             </li>
           ))}
