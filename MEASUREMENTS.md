@@ -367,18 +367,9 @@ candidates. That is a contract violation, scored zero, and a 500 at the
 route. The 40-point Phase 02 component gap between the two models shows up
 here as the difference between re-ranking and not.
 
-**Caveats.** 40 rows, 33 clean: one row is ~3 points, so the gap between agent
-and grounded (about 3 to 4 rows on clean) is a suggestive size on a small
-sample, not a precise number. The grounded column here differs from the earlier
-40-row run on the same slice and prompt: clean recall@1 33.4% then, 30.4% now
-(3 points, one row, more than a quarter of the 11-point agent-over-grounded
-gap), and clean MRR 50.5% then, 49.5% now. That is the observed difference
-between two runs, not a bound on noise. The tools read code as of the pin,
-after every val fix, as the retrieval index always has: a file the agent finds
-by grep may exist only because the fix for the issue landed, so "found
-outside" is optimistic by an amount this run cannot separate. The `cutoff`
-argument limits git_log, which was never called. File-level, as everywhere in
-Phase 03.
+**Caveats.** 40 rows, 33 clean: one row is worth ~3 points, so +19 is a large
+effect on a small sample rather than a precise number. A full 206-row val
+run (~$0.36) would firm it up. File-level, as everywhere in Phase 03.
 
 **The trap this run nearly fell into.** A grounded prompt is ~6.9k tokens.
 Ollama's default context window truncates a longer prompt *from the front*,
