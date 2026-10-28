@@ -145,18 +145,24 @@ def run(
 
     for turn in range(1, max_turns + 1):
         started = time.perf_counter()
-        response = client.messages.create(
-            model=C.ANTHROPIC_MODEL,
-            max_tokens=C.MAX_TOKENS,
-            system=AGENT_SYSTEM,
-            tools=tools.TOOL_SPECS,
-            output_config={"format": {"type": "json_schema",
-                                      "schema": OUTPUT_SCHEMA}},
-            messages=out.messages,
-        )
+        try:
+            response = client.messages.create(
+                model=C.ANTHROPIC_MODEL,
+                max_tokens=C.MAX_TOKENS,
+                system=AGENT_SYSTEM,
+                tools=tools.TOOL_SPECS,
+                output_config={"format": {"type": "json_schema",
+                                          "schema": OUTPUT_SCHEMA}},
+                messages=out.messages,
+            )
+        except anthropic.APIError as exc:
+            # keep the turns already paid for
+            raise RunError(f"API error on turn {turn}: {exc}", out) from exc
         out.turns.append(_record_turn(response, int((time.perf_counter() - started) * 1000)))
 
         if response.stop_reason == "tool_use":
+            if not any(b.type == "tool_use" for b in response.content):
+                raise RunError("tool_use stop with no tool_use blocks", out)
             # The whole content, thinking blocks included, exactly as received.
             out.messages.append({"role": "assistant", "content": response.content})
             results = []

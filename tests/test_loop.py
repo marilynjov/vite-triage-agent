@@ -132,3 +132,29 @@ def test_rejected_final_answer_is_still_in_the_runerror_messages():
     with pytest.raises(loop.RunError) as err:
         _run(final)
     assert err.value.run.messages[-1] == {"role": "assistant", "content": final.content}
+
+
+class _ApiError(anthropic.APIError):
+    def __init__(self):
+        super().__init__("overloaded", request=None, body=None)
+
+
+class _FailingSecondClient(FakeClient):
+    def create(self, **kw):
+        if self.calls:
+            raise _ApiError()
+        return super().create(**kw)
+
+
+def test_api_error_on_a_later_turn_keeps_the_partial_run():
+    client = _FailingSecondClient(_resp([_tool("t1", "list_dir", path="packages")]))
+    with pytest.raises(loop.RunError, match="API error on turn 2") as ei:
+        loop.run("t", "b", [_hit()], CUTOFF, client=client)
+    assert len(ei.value.run.turns) == 1
+    assert isinstance(ei.value.__cause__, anthropic.APIError)
+
+
+def test_tool_use_stop_without_tool_use_blocks_is_a_run_error():
+    with pytest.raises(loop.RunError, match="no tool_use blocks") as ei:
+        _run(_resp([NS(type="text", text="hm")]))
+    assert len(ei.value.run.turns) == 1
