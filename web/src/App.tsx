@@ -14,7 +14,7 @@
  * TypeScript can therefore prove they are there.
  */
 import { useState } from 'react'
-import type { TriageResult } from './types.generated'
+import type { GroundedTriageResult, ToolCall, TriageResult } from './types.generated'
 import './App.css'
 
 const API = 'http://localhost:8000'
@@ -33,7 +33,25 @@ type Envelope = {
 type NaiveResponse = Envelope & { answer: string }
 type StructuredResponse = Envelope & { result: TriageResult }
 
-type Mode = 'naive' | 'structured'
+/**
+ * Phase 04: one run is several model calls, so there is no call_id; the
+ * envelope here is turns + run_id instead. Hand-declared like Envelope.
+ */
+type AgentResponse = {
+  result: GroundedTriageResult
+  candidates: { path: string }[]
+  trace: ToolCall[]
+  turns: number
+  run_id: string
+  model: string
+  provider: string
+  input_tokens: number
+  output_tokens: number
+  latency_ms: number
+  cost_usd: number
+}
+
+type Mode = 'naive' | 'structured' | 'agent'
 
 function money(usd: number): string {
   return usd === 0 ? 'free' : '$' + usd.toFixed(6)
@@ -107,11 +125,87 @@ function Triage({ r }: { r: TriageResult }) {
   )
 }
 
+function AgentPanel({ a }: { a: AgentResponse }) {
+  const cells: [string, string][] = [
+    ['provider', a.provider],
+    ['model', a.model],
+    ['turns', String(a.turns)],
+    ['tokens in / out', `${a.input_tokens} / ${a.output_tokens}`],
+    ['latency', `${(a.latency_ms / 1000).toFixed(1)}s`],
+    ['cost', money(a.cost_usd)],
+    ['run', a.run_id],
+  ]
+  const retrieved = new Set(a.candidates.map((c) => c.path))
+  return (
+    <>
+      <dl className="meters">
+        {cells.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <Triage r={a.result} />
+
+      <h3>Suspected files</h3>
+      {a.result.suspected_files.length > 0 ? (
+        <ul className="components">
+          {a.result.suspected_files.map((f) => (
+            <li key={f} className="mono">
+              {f}{' '}
+              <span className={retrieved.has(f) ? 'tag' : 'tag found'}>
+                {retrieved.has(f) ? 'in candidates' : 'found by looking'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="empty">none identified</p>
+      )}
+
+      <h3>Trace</h3>
+      {a.trace.length > 0 ? (
+        <table className="trace">
+          <thead>
+            <tr>
+              <th>turn</th>
+              <th>tool</th>
+              <th>arguments</th>
+              <th>result</th>
+              <th>ms</th>
+            </tr>
+          </thead>
+          <tbody>
+            {a.trace.map((t, i) => (
+              <tr key={i} className={t.is_error ? 'trace-error' : undefined}>
+                <td className="mono">{t.turn}</td>
+                <td className="mono">{t.name}</td>
+                <td className="mono">{JSON.stringify(t.input)}</td>
+                <td>
+                  <details>
+                    <summary>{t.is_error ? 'error' : `${t.output.length} chars`}</summary>
+                    <pre className="answer">{t.output}</pre>
+                  </details>
+                </td>
+                <td className="mono">{t.duration_ms}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="empty">the model answered without calling a tool</p>
+      )}
+    </>
+  )
+}
+
 export default function App() {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [naive, setNaive] = useState<NaiveResponse | null>(null)
   const [structured, setStructured] = useState<StructuredResponse | null>(null)
+  const [agent, setAgent] = useState<AgentResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState<Mode | null>(null)
 
@@ -119,6 +213,7 @@ export default function App() {
     setPending(mode)
     setError(null)
     if (mode === 'naive') setNaive(null)
+    else if (mode === 'agent') setAgent(null)
     else setStructured(null)
 
     try {
@@ -134,6 +229,7 @@ export default function App() {
         throw new Error(payload.detail ?? response.statusText)
       }
       if (mode === 'naive') setNaive(payload as NaiveResponse)
+      else if (mode === 'agent') setAgent(payload as AgentResponse)
       else setStructured(payload as StructuredResponse)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -180,7 +276,14 @@ export default function App() {
           <button type="button" className="secondary" onClick={() => triage('naive')} disabled={!ready || pending !== null}>
             {pending === 'naive' ? 'Triaging…' : 'Prose (Phase 01)'}
           </button>
-          {pending && <span className="hint">a local model takes ~15s; the API ~3s</span>}
+          <button type="button" className="secondary" onClick={() => triage('agent')} disabled={!ready || pending !== null}>
+            {pending === 'agent' ? 'Investigating…' : 'Agent (Phase 04)'}
+          </button>
+          {pending === 'agent' ? (
+            <span className="hint">an agent run takes ~30s: it reads the code before answering</span>
+          ) : (
+            pending && <span className="hint">a local model takes ~15s; the API ~3s</span>
+          )}
         </div>
       </form>
 
@@ -196,6 +299,13 @@ export default function App() {
           <h2>Typed</h2>
           <Meters envelope={structured} />
           <Triage r={structured.result} />
+        </section>
+      )}
+
+      {agent && (
+        <section className="result">
+          <h2>Agent</h2>
+          <AgentPanel a={agent} />
         </section>
       )}
 

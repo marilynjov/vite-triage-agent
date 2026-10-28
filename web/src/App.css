@@ -261,3 +261,47 @@ button.secondary {
 .mono {
   font-family: var(--mono);
 }
+
+/* ---------- Phase 04: the agent's trace ---------- */
+.tag {
+  font-family: var(--sans, inherit);
+  font-size: 11px;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.tag.found {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.trace {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.trace th,
+.trace td {
+  text-align: left;
+  vertical-align: top;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.trace td:nth-child(3) {
+  word-break: break-all;
+}
+
+.trace-error {
+  background: var(--accent-bg);
+  outline: 1px solid var(--accent-border);
+}
+
+.trace details pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
