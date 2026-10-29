@@ -124,3 +124,14 @@ def test_tool_specs_are_strict():
         and s["input_schema"]["additionalProperties"] is False
         for s in tools.TOOL_SPECS
     )
+
+
+@pytest.mark.parametrize("call", [
+    lambda: tools.grep("import", "packages vite"),
+    lambda: tools.git_log("packages vite", 5, cutoff="2030-01-01"),
+])
+def test_missing_search_path_is_an_error_not_zero_results(call):
+    # Two paths in one string is a path that does not exist. Reporting "0
+    # matches" made the model conclude the code had none.
+    out = call()
+    assert out.startswith("Error: ") and "packages vite" in out

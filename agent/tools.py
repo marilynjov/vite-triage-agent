@@ -116,10 +116,24 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
     return f"{p}: lines {start_line}-{end} of {total}\n{body}"
 
 
+def _missing(p: str, path: str) -> str | None:
+    """An Error for a search path absent at the pin, or None.
+
+    git grep and git log treat an unknown pathspec as "nothing here", so
+    without this a typo or two paths in one string (`"Packages Bowling"`)
+    came back as zero results and read as evidence of absence.
+    """
+    if p and _kind(p) is None:
+        return f"Error: no such path at the pinned commit: {path!r}. Pass one repo-relative file or directory."
+    return None
+
+
 def grep(pattern: str, path: str = "") -> str:
     p = _safe(path)
     if p is None:
         return f"Error: unsafe path {path!r}"
+    if err := _missing(p, path):
+        return err
     sha = pinned_sha()
     # -e makes a pattern like "--output=x" a pattern, not an option.
     args = ["grep", "-n", "-I", "-E", "-e", pattern, sha]
@@ -139,6 +153,8 @@ def git_log(path: str = "", n: int = 10, *, cutoff: str) -> str:
     p = _safe(path)
     if p is None:
         return f"Error: unsafe path {path!r}"
+    if err := _missing(p, path):
+        return err
     n = max(1, min(int(n), MAX_LOG))
     args = ["log", pinned_sha(), f"--before={cutoff}", f"-n{n}",
             "--format=%h %cI %s", "--name-only"]
