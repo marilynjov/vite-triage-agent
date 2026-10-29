@@ -9,8 +9,13 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 
 # ENV_FILE lets a second corpus live in its own file: `ENV_FILE=.env.bowling`.
-# Real environment variables still win over whatever the file says.
+# It loads first, then .env for whatever it leaves unset (the API key, the
+# provider). load_dotenv never overrides a value that is already set, so the
+# order is the precedence: real env vars, then ENV_FILE, then .env. Every
+# config module loads both in this order, so whichever is imported first
+# cannot leave one corpus's repo paired with another corpus's pin.
 load_dotenv(ROOT / os.getenv("ENV_FILE", ".env"))
+load_dotenv(ROOT / ".env")
 
 # DATA_DIR keeps corpora apart. Two repos mined into one directory would
 # silently overwrite each other's dataset, and data/raw is gitignored, so that

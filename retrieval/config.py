@@ -7,7 +7,9 @@ from dotenv import load_dotenv
 
 from mining import config as M
 
+# Same precedence as mining/config.py: ENV_FILE, then .env.
 load_dotenv(M.ROOT / os.getenv("ENV_FILE", ".env"))
+load_dotenv(M.ROOT / ".env")
 
 # Which repo this index belongs to. Taken from the same values the miner uses,
 # so `ENV_FILE=.env.bowling` points mining AND retrieval at the same corpus
