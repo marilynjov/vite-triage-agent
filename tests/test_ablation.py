@@ -180,3 +180,48 @@ def test_load_skips_parsed_lines_that_are_not_records(tmp_path):
     recs = ablation.load_records(p)
     assert len(recs) == 1
     assert ablation.done_keys(recs) == {("a", 1, 0)}
+
+
+def _jobs(arm, n):
+    return [ablation.Job(ARMS[arm], {**ROW, "issue": i}, 0, "val", lambda: ["a", "b"])
+            for i in range(n)]
+
+
+def test_estimate_uses_prior_cost_without_records():
+    assert ablation.estimate_cost(_jobs("agent", 10), []) == pytest.approx(10 * 0.0029)
+
+
+def test_estimate_prefers_measured_cost():
+    recs = [{"arm": "agent", "issue": i, "repeat": 0, "cost_usd": 0.004, "error_kind": None}
+            for i in range(2)]
+    recs.append({"arm": "agent", "issue": 9, "repeat": 0, "cost_usd": 0.5, "error_kind": "api"})
+    assert ablation.estimate_cost(_jobs("agent", 10), recs) == pytest.approx(10 * 0.004)
+
+
+def test_cli_refuses_when_estimate_exceeds_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(ablation, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(ablation.C, "PROVIDER", "anthropic")
+    monkeypatch.setattr(ablation, "val_rows",
+                        lambda split, n: [{**ROW, "issue": i} for i in range(n)])
+
+    def boom(*a, **k):
+        raise AssertionError("must refuse before running")
+    monkeypatch.setattr(ablation, "run_jobs", boom)
+    monkeypatch.setattr(ablation.search, "search_ranked", boom)
+    with pytest.raises(SystemExit):
+        ablation.main(["--arms", "agent", "--n", "10", "--name", "x", "--max-dollars", "0.001"])
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_run_stops_once_spend_passes_cap(tmp_path):
+    out = ablation.run_jobs(_jobs("agent", 10), tmp_path / "r.jsonl", workers=1,
+                            cap_dollars=0.025, run_fn=_fake(["b"]))
+    assert out["ran"] == 3 and out["stopped_for_cap"] is True
+    assert out["spent"] == pytest.approx(0.03)
+    assert len(ablation.load_records(tmp_path / "r.jsonl")) == 3
+
+
+def test_no_cap_means_not_stopped(tmp_path):
+    out = ablation.run_jobs(_jobs("agent", 2), tmp_path / "r.jsonl", workers=1,
+                            run_fn=_fake(["b"]))
+    assert out["ran"] == 2 and out["stopped_for_cap"] is False

@@ -36,6 +36,9 @@ from .retrieve import query_for, score_ranking
 RUNS_DIR = Path("data/runs")
 K_VALUES = [1, 5]
 PREVIEW = 2000
+# dollars per run, measured in earlier phases; used until an arm has a successful record
+PRIOR_COST = {"grounded": 0.0018, "agent-no-tools": 0.0018, "agent": 0.0029,
+              "agent-look": 0.0045, "retrieval": 0.0}
 
 
 class Job(NamedTuple):
@@ -108,12 +111,27 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
     }
 
 
-def run_jobs(jobs: list[Job], path: Path, *, workers: int = 4, run_fn=run) -> dict:
-    """Run the jobs on a thread pool, appending each record as one flushed line."""
+def estimate_cost(jobs: list[Job], records: list[dict]) -> float:
+    """Dollars the pending jobs should cost: per arm, measured mean if any, else the prior."""
+    total = 0.0
+    for name in {j.arm.name for j in jobs}:
+        paid = [r["cost_usd"] for r in records
+                if r["arm"] == name and r.get("error_kind") is None]
+        unit = sum(paid) / len(paid) if paid else PRIOR_COST[name]
+        total += unit * sum(1 for j in jobs if j.arm.name == name)
+    return total
+
+
+def run_jobs(jobs: list[Job], path: Path, *, workers: int = 4,
+             cap_dollars: float | None = None, run_fn=run) -> dict:
+    """Run the jobs on a thread pool, appending each record as one flushed line.
+
+    Once the actual spend passes cap_dollars no new job starts; jobs already in
+    flight finish and are recorded. Skipped jobs are left for a resume."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = threading.Lock()
-    state = {"ran": 0, "spent": 0.0}
+    state = {"ran": 0, "spent": 0.0, "stopped_for_cap": False}
 
     if path.exists() and path.stat().st_size:
         with open(path, "rb") as f:
@@ -125,6 +143,10 @@ def run_jobs(jobs: list[Job], path: Path, *, workers: int = 4, run_fn=run) -> di
 
     with open(path, "a") as fh, ThreadPoolExecutor(workers) as pool:
         def work(job: Job) -> None:
+            with lock:
+                if cap_dollars is not None and state["spent"] > cap_dollars:
+                    state["stopped_for_cap"] = True
+                    return
             try:
                 candidates = job.candidates()
             except Exception as exc:  # retrieval failed: an infrastructure record, not a crash
@@ -185,6 +207,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--n", type=int, default=40)
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--name")
+    ap.add_argument("--max-dollars", type=float, default=3.0,
+                    help="refuse to start if the estimate exceeds this; stop if spend passes it")
     args = ap.parse_args(argv)
     if args.split == "test":
         sys.exit("refusing the test split: it is read once, at the end")
@@ -203,9 +227,16 @@ def main(argv: list[str] | None = None) -> None:
 
     jobs = pending_jobs([ARMS[a] for a in names], val_rows(args.split, args.n),
                         args.repeats, args.split, done_keys(existing))
-    print(f"  {path}: {len(existing)} records, {len(jobs)} to run")
-    out = run_jobs(jobs, path)
+    estimate = estimate_cost(jobs, existing)
+    print(f"  {path}: {len(existing)} records, {len(jobs)} to run, "
+          f"estimated ${estimate:.2f} (cap ${args.max_dollars:.2f})")
+    if estimate > args.max_dollars:
+        sys.exit(f"estimate ${estimate:.2f} exceeds --max-dollars {args.max_dollars}; "
+                 "raise it or shrink --n/--repeats/--arms")
+    out = run_jobs(jobs, path, cap_dollars=args.max_dollars)
     print(f"  ran {out['ran']}   ${out['spent']:.2f}")
+    if out["stopped_for_cap"]:
+        print(f"  stopped: spend passed ${args.max_dollars:.2f}; rerun to resume the rest")
 
 
 if __name__ == "__main__":
