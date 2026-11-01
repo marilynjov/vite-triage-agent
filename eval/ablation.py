@@ -207,9 +207,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--n", type=int, default=40)
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--name")
+    ap.add_argument("--report", metavar="PATH",
+                    help="print the report for an existing run file and exit")
     ap.add_argument("--max-dollars", type=float, default=3.0,
                     help="refuse to start if the estimate exceeds this; stop if spend passes it")
     args = ap.parse_args(argv)
+    if args.report:
+        from . import ablation_report
+        ablation_report.main(args.report)
+        return
     if args.split == "test":
         sys.exit("refusing the test split: it is read once, at the end")
     names = args.arms.split(",")

@@ -1,0 +1,226 @@
+"""Turn ablation run records into the numbers that answer "does looking pay?".
+
+    python -m eval.ablation --report data/runs/val-n40-r3.jsonl
+
+Conventions, fixed before the data came in:
+- error_kind "api" records (infrastructure) are excluded from every score and
+  stat; they appear only as a count in cost_stats. "run" errors score zero and
+  their cost counts.
+- "clean" = issues whose text does not name a gold path; "all" = every record.
+- An arm's score is the mean over repeats of the per-repeat metric mean,
+  reported with the min and max repeat.
+- Comparisons are paired by issue (repeats averaged within an issue) with a
+  percentile bootstrap over issues: 10,000 resamples, seed 0, 95% interval.
+  A difference counts only if the interval excludes zero.
+"""
+from __future__ import annotations
+
+import random
+import statistics
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+from .ablation import load_records
+from .arms import MODEL_ARMS
+
+METRICS = ("recall_at_1", "recall_at_5", "rr")
+AGENT_ARMS = ("agent-no-tools", "agent", "agent-look")
+BASELINE = "grounded"
+EPS = 1e-12
+
+
+def _use(records, arm, subset=None):
+    """Records of the arm that count: api errors out, and the clean filter if asked."""
+    if subset not in (None, "all", "clean"):
+        raise ValueError(f"subset must be 'all' or 'clean', not {subset!r}")
+    return [r for r in records
+            if r["arm"] == arm and r.get("error_kind") != "api"
+            and (subset != "clean" or not r["mentions_gold_path"])]
+
+
+def arm_scores(records, arm, subset):
+    """metric -> (mean of per-repeat means, min, max); empty dict when no records."""
+    recs = _use(records, arm, subset)
+    if not recs:
+        return {}
+    out = {}
+    for m in METRICS:
+        by_rep = defaultdict(list)
+        for r in recs:
+            by_rep[r["repeat"]].append(r[m])
+        means = [sum(v) / len(v) for v in by_rep.values()]
+        out[m] = (sum(means) / len(means), min(means), max(means))
+    return out
+
+
+def _per_issue(records, arm, metric, subset):
+    by_issue = defaultdict(list)
+    for r in _use(records, arm, subset):
+        by_issue[r["issue"]].append(r[metric])
+    return {i: sum(v) / len(v) for i, v in by_issue.items()}
+
+
+def _percentile(sorted_vals, q):
+    """Linear-interpolation percentile, q in [0, 100]."""
+    pos = (len(sorted_vals) - 1) * q / 100
+    lo = int(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (pos - lo)
+
+
+def paired(records, a, b, *, metric="recall_at_1", subset="clean",
+           n_boot=10_000, seed=0):
+    """b versus a over the issues both arms have, or None if there are none."""
+    va = _per_issue(records, a, metric, subset)
+    vb = _per_issue(records, b, metric, subset)
+    shared = sorted(va.keys() & vb.keys())
+    if not shared:
+        return None
+    diffs = [vb[i] - va[i] for i in shared]
+    n = len(diffs)
+    rng = random.Random(seed)
+    means = sorted(sum(diffs[rng.randrange(n)] for _ in range(n)) / n
+                   for _ in range(n_boot))
+    return {"n": n,
+            "wins": sum(d > EPS for d in diffs),
+            "losses": sum(d < -EPS for d in diffs),
+            "ties": sum(abs(d) <= EPS for d in diffs),
+            "diff": sum(diffs) / n,
+            "ci_low": _percentile(means, 2.5), "ci_high": _percentile(means, 97.5)}
+
+
+def flip_rate(records, arm, subset):
+    """Share of issues with >=2 repeats whose rank-1 hit is not the same every time."""
+    hits = defaultdict(list)
+    for r in _use(records, arm, subset):
+        hits[r["issue"]].append(r["recall_at_1"] > 0)
+    multi = [h for h in hits.values() if len(h) >= 2]
+    if not multi:
+        return None
+    return sum(len(set(h)) > 1 for h in multi) / len(multi)
+
+
+def tool_stats(records, arm):
+    recs = _use(records, arm)
+    if not recs:
+        return {}
+    calls = [c for r in recs for c in r["tool_calls"]]
+    by_tool = defaultdict(int)
+    for c in calls:
+        by_tool[c["name"]] += 1
+    picks = seen = 0
+    for r in recs:
+        blob = "\n".join(c["output_preview"] for c in r["tool_calls"])
+        for p in r["picked"]:
+            picks += 1
+            seen += p in blob
+    turns = sorted(r["turns"] for r in recs)
+    return {"n": len(recs),
+            "used_any": sum(bool(r["tool_calls"]) for r in recs) / len(recs),
+            "turns_mean": sum(turns) / len(turns),
+            "turns_p50": statistics.median(turns), "turns_max": turns[-1],
+            "calls_by_tool": dict(by_tool),
+            "tool_error_rate": (sum(bool(c["is_error"]) for c in calls) / len(calls)
+                                if calls else None),
+            "picks_seen": seen / picks if picks else None}
+
+
+def cost_stats(records, arm):
+    mine = [r for r in records if r["arm"] == arm]
+    api = sum(r.get("error_kind") == "api" for r in mine)
+    recs = [r for r in mine if r.get("error_kind") != "api"]
+    base = {"run_errors": sum(r.get("error_kind") == "run" for r in recs),
+            "api_errors": api}
+    if not recs:
+        return {**base, "per_triage": None, "per_correct": None,
+                "p50_ms": None, "p95_ms": None}
+    total = sum(r["cost_usd"] for r in recs)
+    hits = sum(r["recall_at_1"] > 0 for r in recs)
+    lat = sorted(r["latency_ms"] for r in recs)
+    return {**base, "per_triage": total / len(recs),
+            "per_correct": total / hits if hits else None,
+            "p50_ms": _percentile(lat, 50), "p95_ms": _percentile(lat, 95)}
+
+
+def choose_arm(records):
+    """Best agent arm whose clean recall@1 beats grounded with ci_low > 0, else grounded."""
+    best, best_mean = BASELINE, None
+    for arm in AGENT_ARMS:
+        p = paired(records, BASELINE, arm)
+        if p is None or not p["ci_low"] > 0:
+            continue
+        mean = arm_scores(records, arm, "clean")["recall_at_1"][0]
+        if best_mean is None or mean > best_mean:
+            best, best_mean = arm, mean
+    return best
+
+
+def _f(x, spec=".3f"):
+    return "n/a" if x is None else format(x, spec)
+
+
+def markdown(records) -> str:
+    arms = [BASELINE, *AGENT_ARMS]
+    L = []
+    L += ["## Scores (mean over repeats; min-max across repeats)", "",
+          "| arm | subset | n | recall@1 | recall@5 | MRR | flip rate |",
+          "|---|---|---|---|---|---|---|"]
+    for arm in arms:
+        for sub in ("all", "clean"):
+            s = arm_scores(records, arm, sub)
+            if not s:
+                L.append(f"| {arm} | {sub} | 0 | no data | | | |")
+                continue
+            cells = [f"{s[m][0]:.3f} ({s[m][1]:.3f}-{s[m][2]:.3f})" for m in METRICS]
+            n = len(_use(records, arm, sub))
+            L.append(f"| {arm} | {sub} | {n} | " + " | ".join(cells)
+                     + f" | {_f(flip_rate(records, arm, sub))} |")
+    L += ["", "## Paired against grounded (clean, recall@1, 95% bootstrap over issues)", "",
+          "| arm | issues | wins | losses | ties | diff | 95% interval | excludes 0 |",
+          "|---|---|---|---|---|---|---|---|"]
+    for arm in AGENT_ARMS:
+        p = paired(records, BASELINE, arm)
+        if p is None:
+            L.append(f"| {arm} | 0 | no data | | | | | |")
+            continue
+        sig = "yes" if p["ci_low"] > 0 or p["ci_high"] < 0 else "no"
+        L.append(f"| {arm} | {p['n']} | {p['wins']} | {p['losses']} | {p['ties']} | "
+                 f"{p['diff']:+.3f} | [{p['ci_low']:+.3f}, {p['ci_high']:+.3f}] | {sig} |")
+    L += ["", "## Cost and latency", "",
+          "| arm | $/triage | $/correct | p50 ms | p95 ms | run errors | api errors |",
+          "|---|---|---|---|---|---|---|"]
+    for arm in arms:
+        if not any(r["arm"] == arm for r in records):
+            L.append(f"| {arm} | no data | | | | | |")
+            continue
+        c = cost_stats(records, arm)
+        L.append(f"| {arm} | {_f(c['per_triage'], '.4f')} | {_f(c['per_correct'], '.4f')} | "
+                 f"{_f(c['p50_ms'], '.0f')} | {_f(c['p95_ms'], '.0f')} | "
+                 f"{c['run_errors']} | {c['api_errors']} |")
+    L += ["", "## Tool use", "",
+          "| arm | used any | turns mean/p50/max | calls by tool | tool error rate | picks seen |",
+          "|---|---|---|---|---|---|"]
+    for arm in AGENT_ARMS:
+        t = tool_stats(records, arm)
+        if not t:
+            L.append(f"| {arm} | no data | | | | |")
+            continue
+        calls = ", ".join(f"{k}={v}" for k, v in sorted(t["calls_by_tool"].items())) or "none"
+        L.append(f"| {arm} | {t['used_any']:.2f} | {t['turns_mean']:.1f}/"
+                 f"{t['turns_p50']:g}/{t['turns_max']} | {calls} | "
+                 f"{_f(t['tool_error_rate'], '.2f')} | {_f(t['picks_seen'], '.2f')} |")
+    L += ["", f"**Chosen arm: {choose_arm(records)}**"]
+    return "\n".join(L)
+
+
+def main(path) -> None:
+    records = load_records(Path(path))
+    if not records:
+        print(f"no data in {path}")
+        return
+    print(markdown(records))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
