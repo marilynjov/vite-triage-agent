@@ -98,7 +98,8 @@ def test_cutoff_is_the_rows_created_at():
 
 def test_load_skips_a_partial_last_line(tmp_path):
     p = tmp_path / "r.jsonl"
-    p.write_text('{"arm": "a"}\n\n{"arm": "b"}\n{"arm": "ag')
+    p.write_text('{"arm": "a", "issue": 1, "repeat": 0}\n\n'
+                '{"arm": "b", "issue": 2, "repeat": 0}\n{"arm": "ag')
     assert [r["arm"] for r in ablation.load_records(p)] == ["a", "b"]
     assert ablation.load_records(tmp_path / "missing.jsonl") == []
 
@@ -144,3 +145,38 @@ def test_refuses_the_test_split(tmp_path, monkeypatch):
     monkeypatch.setattr(ablation, "RUNS_DIR", tmp_path)
     with pytest.raises(SystemExit):
         ablation.main(["--arms", "agent", "--split", "test"])
+
+
+def test_retrieval_failure_becomes_an_api_record_and_other_jobs_run(tmp_path):
+    def bad():
+        raise ConnectionError("db down")
+    ok = lambda: ["a", "b"]
+    jobs = [ablation.Job(ARMS["agent"], {**ROW, "issue": 1}, 0, "val", bad),
+            ablation.Job(ARMS["retrieval"], {**ROW, "issue": 2}, 0, "val", bad),
+            ablation.Job(ARMS["agent"], {**ROW, "issue": 3}, 0, "val", ok)]
+    p = tmp_path / "r.jsonl"
+    out = ablation.run_jobs(jobs, p, run_fn=_fake(["b"]))
+    recs = {r["issue"]: r for r in ablation.load_records(p)}
+    assert out["ran"] == 3
+    for i in (1, 2):
+        r = recs[i]
+        assert set(r) == FIELDS and r["error_kind"] == "api" and "db down" in r["error"]
+        assert r["turns"] == 0 and r["cost_usd"] == 0 and r["picked"] == [] and r["candidates"] == []
+    assert recs[3]["error"] is None
+
+
+def test_append_after_a_torn_last_line_keeps_the_new_record(tmp_path):
+    p = tmp_path / "r.jsonl"
+    p.write_text('{"arm": "agent", "issue": 1, "repeat": 0}\n{"arm": "ag')
+    job = ablation.Job(ARMS["agent"], ROW, 0, "val", lambda: ["a", "b"])
+    ablation.run_jobs([job], p, run_fn=_fake(["b"]))
+    recs = ablation.load_records(p)
+    assert len(recs) == 2 and recs[1]["issue"] == ROW["issue"]
+
+
+def test_load_skips_parsed_lines_that_are_not_records(tmp_path):
+    p = tmp_path / "r.jsonl"
+    p.write_text('{"arm": "a", "issue": 1, "repeat": 0}\n12\n[1]\n{"arm": "x"}\n"s"\n')
+    recs = ablation.load_records(p)
+    assert len(recs) == 1
+    assert ablation.done_keys(recs) == {("a", 1, 0)}

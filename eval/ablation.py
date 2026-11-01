@@ -20,6 +20,7 @@ import json
 import sys
 import threading
 import time
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, NamedTuple
@@ -52,9 +53,11 @@ def load_records(path: Path) -> list[dict]:
     out = []
     for line in open(path):
         try:
-            out.append(json.loads(line))
+            rec = json.loads(line)
         except ValueError:
             continue
+        if isinstance(rec, dict) and {"arm", "issue", "repeat"} <= rec.keys():
+            out.append(rec)
     return out
 
 
@@ -112,10 +115,26 @@ def run_jobs(jobs: list[Job], path: Path, *, workers: int = 4, run_fn=run) -> di
     lock = threading.Lock()
     state = {"ran": 0, "spent": 0.0}
 
+    if path.exists() and path.stat().st_size:
+        with open(path, "rb") as f:
+            f.seek(-1, 2)
+            torn = f.read(1) != b"\n"
+        if torn:  # a crash left a partial line; do not glue the next record onto it
+            with open(path, "a") as f:
+                f.write("\n")
+
     with open(path, "a") as fh, ThreadPoolExecutor(workers) as pool:
         def work(job: Job) -> None:
-            rec = make_record(job.arm, job.row, job.repeat, job.candidates(), job.split,
-                              run_fn=run_fn)
+            try:
+                candidates = job.candidates()
+            except Exception as exc:  # retrieval failed: an infrastructure record, not a crash
+                def fail(*a, **k):
+                    raise exc
+                rec = make_record(replace(job.arm, system=job.arm.system or ""), job.row,
+                                  job.repeat, [], job.split, run_fn=fail)
+            else:
+                rec = make_record(job.arm, job.row, job.repeat, candidates, job.split,
+                                  run_fn=run_fn)
             with lock:
                 fh.write(json.dumps(rec) + "\n")
                 fh.flush()
