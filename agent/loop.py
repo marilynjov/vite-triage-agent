@@ -132,6 +132,8 @@ def run(
     candidates: list[FileHit],
     cutoff: str,
     *,
+    system: str = AGENT_SYSTEM,
+    tool_specs: list[dict] | None = None,
     max_turns: int | None = None,
     client: Any = None,
 ) -> Run:
@@ -139,6 +141,8 @@ def run(
         # built here, not at import, so tests never need a key
         client = anthropic.Anthropic()
     max_turns = max_turns or C.AGENT_MAX_TURNS
+    # None means the full tool set; [] means none, and the request then omits the key
+    tool_specs = tools.TOOL_SPECS if tool_specs is None else tool_specs
 
     out = Run()
     out.messages.append({"role": "user", "content": grounded_prompt(title, body, candidates)})
@@ -146,15 +150,17 @@ def run(
     for turn in range(1, max_turns + 1):
         started = time.perf_counter()
         try:
-            response = client.messages.create(
+            request: dict[str, Any] = dict(
                 model=C.ANTHROPIC_MODEL,
                 max_tokens=C.MAX_TOKENS,
-                system=AGENT_SYSTEM,
-                tools=tools.TOOL_SPECS,
+                system=system,
                 output_config={"format": {"type": "json_schema",
                                           "schema": OUTPUT_SCHEMA}},
                 messages=out.messages,
             )
+            if tool_specs:
+                request["tools"] = tool_specs
+            response = client.messages.create(**request)
         except anthropic.APIError as exc:
             # keep the turns already paid for
             raise RunError(f"API error on turn {turn}: {exc}", out) from exc
