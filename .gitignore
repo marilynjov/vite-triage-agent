@@ -12,3 +12,6 @@ data/pinned_sha.txt
 # bodies, PR text and commit messages from a private source must never be
 # committed here. data/splits/ (Vite, public) stays the deliberate exception.
 data/bowling/
+
+# Ablation run records (Phase 05a): reproducible, and large.
+data/runs/
