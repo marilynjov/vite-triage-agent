@@ -82,3 +82,30 @@ def test_cache_is_reused(tmp_path, monkeypatch):
     calls.clear()
     assert gr.load_regions([ROW_14065]) == first
     assert calls == []
+
+
+def test_bad_repo_path_raises(monkeypatch):
+    monkeypatch.setattr(M, "REPO_PATH", M.ROOT / "no-such-clone")
+    with pytest.raises(Exception):
+        gr._blame(ESBUILD)
+
+
+def test_bad_pin_raises(tmp_path, monkeypatch):
+    pin = tmp_path / "pin.txt"
+    pin.write_text("0" * 40)
+    monkeypatch.setattr(M, "PINNED_SHA", pin)
+    with pytest.raises(RuntimeError):
+        gr._blame(ESBUILD)
+
+
+def test_cache_entry_with_other_or_no_pin_is_rebuilt(tmp_path, monkeypatch):
+    cache = tmp_path / "gold_regions.jsonl"
+    monkeypatch.setattr(gr, "CACHE", cache)
+    stale = {"issue": 14065, "regions": {ESBUILD: []}}
+    cache.write_text(json.dumps(stale) + "\n")  # no pin
+    got = gr.load_regions([ROW_14065])
+    assert got[14065][ESBUILD]
+    cache.write_text(json.dumps(dict(stale, pin="0" * 40)) + "\n")  # other pin
+    assert gr.load_regions([ROW_14065])[14065][ESBUILD]
+    assert json.loads(cache.read_text())["pin"] == gr._pin()
+    assert not cache.with_name(cache.name + ".tmp").exists()

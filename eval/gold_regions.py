@@ -8,6 +8,7 @@ later (or a file absent at the pin) maps to [].
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 
@@ -30,17 +31,33 @@ def fix_commits(row: dict, commits: list[dict]) -> list[str]:
     ]
 
 
-def _blame(path: str) -> list[tuple[str, int]]:
-    """(sha, pin line number) for every line of `path` at the pin; [] if absent."""
-    pin = M.PINNED_SHA.read_text().strip()
-    r = subprocess.run(
-        ["git", "--literal-pathspecs", "-C", str(M.REPO_PATH),
-         "blame", "--line-porcelain", pin, "--", path],
+def _pin() -> str:
+    return M.PINNED_SHA.read_text().strip()
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "--literal-pathspecs", "-C", str(M.REPO_PATH), *args],
         capture_output=True, text=True, errors="replace", check=False,
         timeout=GIT_TIMEOUT,
     )
-    if r.returncode != 0:
+
+
+def _blame(path: str) -> list[tuple[str, int]]:
+    """(sha, pin line number) for every line of `path` at the pin.
+
+    Only a path absent at the pin gives []; any other git failure (bad repo
+    path, pin missing from the clone) raises, so it is never cached as empty.
+    """
+    pin = _pin()
+    commit = _git("cat-file", "-e", f"{pin}^{{commit}}")
+    if commit.returncode != 0:
+        raise RuntimeError(f"git cannot resolve pin {pin} in {M.REPO_PATH}: {commit.stderr.strip()}")
+    if _git("cat-file", "-e", f"{pin}:{path}").returncode != 0:
         return []
+    r = _git("blame", "--line-porcelain", pin, "--", path)
+    if r.returncode != 0:
+        raise RuntimeError(f"git blame failed for {path} at {pin}: {r.stderr.strip()}")
     out = []
     for line in r.stdout.split("\n"):
         m = _HEADER.match(line)
@@ -69,12 +86,17 @@ def regions_for(row: dict, commits: list[dict]) -> Regions:
 
 
 def load_regions(rows: list[dict]) -> dict[int, Regions]:
-    """Regions by issue; computed once per issue and cached in CACHE."""
-    cached = {r["issue"]: r["regions"] for r in jsonl.read(CACHE)} if CACHE.exists() else {}
+    """Regions by issue; computed once per issue and pin, cached in CACHE."""
+    pin = _pin()
+    cached = {}
+    if CACHE.exists():
+        cached = {r["issue"]: r["regions"] for r in jsonl.read(CACHE) if r.get("pin") == pin}
     todo = [r for r in rows if r["issue"] not in cached]
     if todo:
         commits = list(jsonl.read(M.RAW / "commits.jsonl"))
         for r in todo:
             cached[r["issue"]] = regions_for(r, commits)
-        jsonl.write(CACHE, ({"issue": i, "regions": g} for i, g in cached.items()))
+        tmp = CACHE.with_name(CACHE.name + ".tmp")
+        jsonl.write(tmp, ({"issue": i, "pin": pin, "regions": g} for i, g in cached.items()))
+        os.replace(tmp, CACHE)
     return {r["issue"]: cached[r["issue"]] for r in rows}
