@@ -17,9 +17,9 @@ same way the miner stays repo-agnostic.
 """
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 IssueType = Literal["bug", "regression", "enhancement", "documentation", "question", "upstream"]
 Severity = Literal["low", "medium", "high"]
@@ -108,3 +108,107 @@ def json_schema(model: type[BaseModel] = TriageResult) -> dict[str, Any]:
     schema["additionalProperties"] = False
     schema["required"] = sorted(schema["properties"].keys())
     return schema
+
+
+# --- Phase 05 B+C: the live-run event stream -------------------------------
+# Shared by the SSE endpoint and the UI reducer. Each model's JSON-Schema title
+# is its class name so the generated TypeScript types carry exactly these names.
+
+class _Live(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+class Totals(_Live):
+    model_config = {"extra": "forbid", "title": "Totals"}
+    turns: int
+    tokens: int
+    cost_usd: float
+    seconds: float
+
+
+class LiveCandidate(_Live):
+    model_config = {"extra": "forbid", "title": "LiveCandidate"}
+    path: str
+    score: float
+    start_line: int
+    end_line: int
+
+
+class RunStarted(_Live):
+    model_config = {"extra": "forbid", "title": "RunStarted"}
+    type: Literal["run_started"]
+    seq: int
+    candidates: list[LiveCandidate]
+
+
+class StepStarted(_Live):
+    model_config = {"extra": "forbid", "title": "StepStarted"}
+    type: Literal["step_started"]
+    seq: int
+    turn: int
+
+
+class Usage(_Live):
+    model_config = {"extra": "forbid", "title": "Usage"}
+    type: Literal["usage"]
+    seq: int
+    turn: int
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    totals: Totals
+
+
+class ToolCalled(_Live):
+    model_config = {"extra": "forbid", "title": "ToolCalled"}
+    type: Literal["tool_called"]
+    seq: int
+    turn: int
+    tool_use_id: str
+    name: str
+    input: dict[str, Any]
+
+
+class ToolReturned(_Live):
+    model_config = {"extra": "forbid", "title": "ToolReturned"}
+    type: Literal["tool_returned"]
+    seq: int
+    turn: int
+    tool_use_id: str
+    name: str
+    output_preview: str
+    is_error: bool
+    duration_ms: int
+
+
+class Done(_Live):
+    model_config = {"extra": "forbid", "title": "Done"}
+    type: Literal["done"]
+    seq: int
+    result: GroundedTriageResult
+    totals: Totals
+
+
+def _require_all(schema: dict[str, Any]) -> None:
+    # limit/value default to None (the loop omits them unless a budget stopped
+    # the run), but the wire contract always carries them: required in the
+    # schema keeps the TypeScript fields non-optional (`string | null`).
+    schema["required"] = sorted(schema["properties"])
+
+
+class Failed(_Live):
+    model_config = {"extra": "forbid", "title": "Failed", "json_schema_extra": _require_all}
+    type: Literal["failed"]
+    seq: int
+    reason: Literal["budget", "run", "api"]
+    message: str
+    totals: Totals
+    limit: Literal["turns", "tokens", "seconds", "dollars"] | None = None
+    value: float | None = None
+
+
+LiveEvent = Annotated[
+    Union[RunStarted, StepStarted, Usage, ToolCalled, ToolReturned, Done, Failed],
+    Field(discriminator="type"),
+]
+LIVE_EVENT = TypeAdapter(LiveEvent)

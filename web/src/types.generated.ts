@@ -57,6 +57,11 @@ export type Name = string;
 export type Output = string;
 export type IsError = boolean;
 export type DurationMs = number;
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "LiveEvent".
+ */
+export type LiveEvent = RunStarted | StepStarted | Usage | ToolCalled | ToolReturned | Done | Failed;
 
 /**
  * What a maintainer concludes from reading a bug report, as data.
@@ -85,4 +90,106 @@ export interface ToolCall {
 }
 export interface Input {
   [k: string]: unknown;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "Totals".
+ */
+export interface Totals {
+  turns: number;
+  tokens: number;
+  cost_usd: number;
+  seconds: number;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "LiveCandidate".
+ */
+export interface LiveCandidate {
+  path: string;
+  score: number;
+  start_line: number;
+  end_line: number;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "RunStarted".
+ */
+export interface RunStarted {
+  type: "run_started";
+  seq: number;
+  candidates: LiveCandidate[];
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "StepStarted".
+ */
+export interface StepStarted {
+  type: "step_started";
+  seq: number;
+  turn: number;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "Usage".
+ */
+export interface Usage {
+  type: "usage";
+  seq: number;
+  turn: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  totals: Totals;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "ToolCalled".
+ */
+export interface ToolCalled {
+  type: "tool_called";
+  seq: number;
+  turn: number;
+  tool_use_id: string;
+  name: string;
+  input: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "ToolReturned".
+ */
+export interface ToolReturned {
+  type: "tool_returned";
+  seq: number;
+  turn: number;
+  tool_use_id: string;
+  name: string;
+  output_preview: string;
+  is_error: boolean;
+  duration_ms: number;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "Done".
+ */
+export interface Done {
+  type: "done";
+  seq: number;
+  result: GroundedTriageResult;
+  totals: Totals;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "Failed".
+ */
+export interface Failed {
+  type: "failed";
+  seq: number;
+  reason: "budget" | "run" | "api";
+  message: string;
+  totals: Totals;
+  limit: ("turns" | "tokens" | "seconds" | "dollars") | null;
+  value: number | null;
 }

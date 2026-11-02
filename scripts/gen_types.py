@@ -17,7 +17,38 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "web" / "src" / "types.generated.ts"
 
 sys.path.insert(0, str(ROOT))
-from api.schema import GroundedTriageResult, ToolCall, TriageResult  # noqa: E402
+from api.schema import (  # noqa: E402
+    Done, Failed, GroundedTriageResult, LiveCandidate, RunStarted, StepStarted,
+    ToolCall, ToolCalled, ToolReturned, Totals, TriageResult, Usage,
+)
+
+LIVE_MEMBERS = [RunStarted, StepStarted, Usage, ToolCalled, ToolReturned, Done, Failed]
+LIVE_PARTS = [Totals, LiveCandidate]
+
+
+def live_defs() -> dict:
+    """The live-run events as $defs, each titled by its class name, plus the LiveEvent union.
+
+    Every model is rendered with refs pointing at the shared $defs, and Done.result
+    points at the GroundedTriageResult already emitted above rather than a copy.
+    """
+    defs: dict = {}
+    for model in LIVE_PARTS + LIVE_MEMBERS:
+        schema = model.model_json_schema(ref_template="#/$defs/{model}")
+        schema.pop("$defs", None)
+        schema["title"] = model.__name__
+        # Property titles would each become a numbered alias (Type3, Seq5, ...);
+        # without them the fields are typed inline and only the named types remain.
+        for prop in schema["properties"].values():
+            prop.pop("title", None)
+        defs[model.__name__] = schema
+    defs["Done"]["properties"]["result"] = {"$ref": "#/$defs/GroundedTriageResult"}
+    defs["LiveEvent"] = {
+        "title": "LiveEvent",
+        "oneOf": [{"$ref": f"#/$defs/{m.__name__}"} for m in LIVE_MEMBERS],
+    }
+    return defs
+
 
 
 def main() -> None:
@@ -41,6 +72,7 @@ def main() -> None:
         },
         # Not reachable from TriageResult; emitted the same way so the UI can import it.
         "ToolCall": ToolCall.model_json_schema(),
+        **live_defs(),
     }
 
     try:
