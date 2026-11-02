@@ -5,7 +5,8 @@
 Conventions, fixed before the data came in:
 - error_kind "api" records (infrastructure) are excluded from every score and
   stat; they appear only as a count in cost_stats. "run" errors score zero and
-  their cost counts.
+  their cost counts. Cost note: api-error records are excluded from cost too, so
+  paid turns inside an api-error run are not in $/triage (the runtime cap counts them).
 - "clean" = issues whose text does not name a gold path; "all" = every record.
 - An arm's score is the mean over repeats of the per-repeat metric mean,
   reported with the min and max repeat.
@@ -133,6 +134,8 @@ def tool_stats(records, arm):
 
 
 def cost_stats(records, arm):
+    """Cost and latency per arm. api-error records are excluded from cost, so paid
+    turns inside an api-error run are not counted in $/triage (the runtime cap does)."""
     mine = [r for r in records if r["arm"] == arm]
     api = sum(r.get("error_kind") == "api" for r in mine)
     recs = [r for r in mine if r.get("error_kind") != "api"]
@@ -234,6 +237,12 @@ def main(path) -> None:
     if not records:
         print(f"no data in {path}")
         return
+    keys = [(r["arm"], r["issue"], r["repeat"]) for r in records
+            if r.get("error_kind") != "api"]
+    dup = len(keys) - len(set(keys))
+    if dup:
+        print(f"WARNING: {dup} duplicate non-api (arm, issue, repeat) record(s) in {path}; "
+              "they are counted twice below")
     print(markdown(records))
 
 

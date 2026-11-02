@@ -196,3 +196,22 @@ def test_markdown_vs_retrieval_says_no_data_without_retrieval_records():
     md = R.markdown(_arms({"agent": 1.0}))
     sec = md.split("## Each model arm against retrieval (clean")[1].split("## ")[0]
     assert "| retrieval -> agent | 0 | no data" in sec
+
+
+def test_main_warns_about_duplicate_non_api_keys(tmp_path, capsys):
+    import json
+    rows = [rec(issue=1), rec(issue=1), rec(issue=2), rec(issue=2, kind="api"),
+            rec(issue=2, kind="api")]
+    p = tmp_path / "d.jsonl"
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    R.main(p)
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "1 duplicate" in out
+
+
+def test_main_no_warning_without_duplicates(tmp_path, capsys):
+    import json
+    p = tmp_path / "d.jsonl"
+    p.write_text(json.dumps(rec(issue=1)) + "\n")
+    R.main(p)
+    assert "WARNING" not in capsys.readouterr().out
