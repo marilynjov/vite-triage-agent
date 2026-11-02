@@ -205,3 +205,13 @@ def test_schema_is_computed_once_per_model(monkeypatch):
     _run(_tiny_final(), output_model=Tiny)
     assert calls == [Tiny]
     assert loop._schema_for(Tiny) is loop._schema_for(Tiny)
+
+
+def test_prompt_replaces_the_grounded_first_message():
+    client, run = _run(_final([CSS]), prompt="my own prompt")
+    assert client.calls[0]["messages"][0]["content"] == "my own prompt"
+
+
+def test_empty_tool_specs_omit_the_tools_key():
+    client, _ = _run(_final([CSS]), tool_specs=[])
+    assert "tools" not in client.calls[0]

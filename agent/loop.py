@@ -199,6 +199,7 @@ def run(
     client: Any = None,
     output_model: type[BaseModel] = GroundedTriageResult,
     check: Callable[[BaseModel], None] | None = None,
+    prompt: str | None = None,
 ) -> Run:
     if client is None:
         # built here, not at import, so tests never need a key
@@ -215,7 +216,9 @@ def run(
     tool_specs = tools.TOOL_SPECS if tool_specs is None else tool_specs
 
     out = Run()
-    out.messages.append({"role": "user", "content": grounded_prompt(title, body, candidates)})
+    # a stage passes its own prepared first message; everyone else gets the grounded prompt
+    out.messages.append({"role": "user", "content":
+                         prompt if prompt is not None else grounded_prompt(title, body, candidates)})
 
     def fail(exc: RunError, reason: str) -> RunError:
         event = {"type": "failed", "reason": reason, "message": str(exc),
