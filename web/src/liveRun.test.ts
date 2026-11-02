@@ -126,3 +126,19 @@ test('reduce does not mutate the previous state or the event', () => {
   expect(prev).toEqual(snapshot)
   expect(step).toEqual(evSnap)
 })
+
+test('connection_gone moves running and reconnecting to lost', () => {
+  const running = run([runStarted])
+  const lost = reduce(running, { kind: 'connection_gone' })
+  expect(lost.status).toBe('lost')
+  expect(isTerminal(lost)).toBe(true)
+  const reconnecting = reduce(running, { kind: 'connection_lost' })
+  expect(reduce(reconnecting, { kind: 'connection_gone' }).status).toBe('lost')
+})
+
+test('connection_gone never touches done or failed', () => {
+  const d = run(sequence)
+  expect(reduce(d, { kind: 'connection_gone' })).toBe(d)
+  const f = run([...sequence.slice(0, 5), failed])
+  expect(reduce(f, { kind: 'connection_gone' })).toBe(f)
+})

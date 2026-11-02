@@ -164,7 +164,17 @@ function openStream(
     if (current()) dispatch({ kind: 'connection_open' })
   }
   source.onerror = () => {
-    if (current()) dispatch({ kind: 'connection_lost' })
+    if (!current()) return
+    // CLOSED means the server refused the reconnect (404: expired or restarted);
+    // the browser will not retry.
+    if (source.readyState === EventSource.CLOSED) {
+      source.close()
+      sourceRef.current = null
+      storeRunId(null)
+      dispatch({ kind: 'connection_gone' })
+      return
+    }
+    dispatch({ kind: 'connection_lost' })
   }
   // The server sends named events, which onmessage never sees.
   for (const type of EVENT_TYPES) {
@@ -215,6 +225,12 @@ function LivePanel({ live, limits }: { live: LiveState; limits: Limits | null })
       <LiveMeters live={live} limits={limits} />
 
       {live.status === 'reconnecting' && <p className="hint">connection lost, reconnecting…</p>}
+      {live.status === 'lost' && (
+        <p className="hint">
+          This run is no longer available on the server (it expired or the API
+          restarted). Start a new run.
+        </p>
+      )}
 
       {failure !== null && (
         <section className="error">
@@ -290,7 +306,9 @@ function LivePanel({ live, limits }: { live: LiveState; limits: Limits | null })
         <p className="empty">
           {live.status === 'done'
             ? 'the model answered without calling a tool'
-            : 'waiting for the first tool call'}
+            : isTerminal(live)
+              ? 'no tool calls'
+              : 'waiting for the first tool call'}
         </p>
       )}
     </>
@@ -307,6 +325,8 @@ export default function App() {
   const [live, dispatch] = useReducer(reduce, initialLiveState)
   const [limits, setLimits] = useState<Limits | null>(null)
   const sourceRef = useRef<EventSource | null>(null)
+  const startingRef = useRef(false)
+  const [starting, setStarting] = useState(false)
 
   function closeSource() {
     if (sourceRef.current !== null) sourceRef.current.close()
@@ -351,6 +371,9 @@ export default function App() {
   }, [live])
 
   async function startAgent() {
+    if (startingRef.current) return // a double-click must not POST twice
+    startingRef.current = true
+    setStarting(true)
     setError(null)
     try {
       const response = await fetch(`${API}/runs`, {
@@ -369,6 +392,9 @@ export default function App() {
       openStream(runId, 0, dispatch, sourceRef)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      startingRef.current = false
+      setStarting(false)
     }
   }
 
@@ -438,8 +464,8 @@ export default function App() {
           <button type="button" className="secondary" onClick={() => triage('naive')} disabled={!ready || pending !== null}>
             {pending === 'naive' ? 'Triaging…' : 'Prose (Phase 01)'}
           </button>
-          <button type="button" className="secondary" onClick={startAgent} disabled={!ready || liveBusy}>
-            {liveBusy ? 'Investigating…' : 'Agent (live)'}
+          <button type="button" className="secondary" onClick={startAgent} disabled={!ready || liveBusy || starting}>
+            {liveBusy || starting ? 'Investigating…' : 'Agent (live)'}
           </button>
           {pending && <span className="hint">a local model takes ~15s; the API ~3s</span>}
         </div>

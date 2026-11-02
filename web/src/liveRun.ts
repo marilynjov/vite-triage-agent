@@ -14,7 +14,7 @@ import type {
   Totals,
 } from './types.generated'
 
-export type LiveStatus = 'idle' | 'running' | 'reconnecting' | 'done' | 'failed'
+export type LiveStatus = 'idle' | 'running' | 'reconnecting' | 'done' | 'failed' | 'lost'
 
 export interface LiveCall {
   toolUseId: string
@@ -43,6 +43,7 @@ export type LiveAction =
   | { kind: 'event'; event: LiveEvent }
   | { kind: 'connection_lost' }
   | { kind: 'connection_open' }
+  | { kind: 'connection_gone' }
 
 export const initialLiveState: LiveState = {
   runId: null,
@@ -57,7 +58,7 @@ export const initialLiveState: LiveState = {
 }
 
 export function isTerminal(s: LiveState): boolean {
-  return s.status === 'done' || s.status === 'failed'
+  return s.status === 'done' || s.status === 'failed' || s.status === 'lost'
 }
 
 /** Apply one in-order event; returns a new state. */
@@ -130,6 +131,10 @@ export function reduce(state: LiveState, action: LiveAction): LiveState {
       return receive(state, action.event)
     case 'connection_lost':
       return state.status === 'running' ? { ...state, status: 'reconnecting' } : state
+    case 'connection_gone':
+      return state.status === 'running' || state.status === 'reconnecting'
+        ? { ...state, status: 'lost' }
+        : state
     case 'connection_open':
       return state.status === 'reconnecting' ? { ...state, status: 'running' } : state
   }
