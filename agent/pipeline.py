@@ -8,7 +8,7 @@ from api.schema import HypothesisResult, LocateResult, ToolCall, UnderstandResul
 from retrieval.search import FileHit
 
 from . import loop, stages
-from .loop import Budget, Run, RunError, Turn
+from .loop import Budget, BudgetExceeded, Run, RunError, Turn
 
 STAGE_TURNS = {"locate": 8, "understand": 6, "hypothesize": 1}
 STAGES = tuple(STAGE_TURNS)
@@ -56,9 +56,12 @@ class PipelineRun:
 class PipelineError(RunError):
     """A stage failed. The message is the stage's own; `.stage` says which."""
 
-    def __init__(self, message: str, run: PipelineRun, stage: str):
+    def __init__(self, message: str, run: PipelineRun, stage: str, *,
+                 limit: str | None = None, value: float | None = None):
         super().__init__(message, run)
         self.stage = stage
+        self.limit = limit  # set when a budget stopped the stage
+        self.value = value
 
 
 def run_pipeline(title: str, body: str, candidates: list[FileHit], cutoff: str, *,
@@ -66,31 +69,40 @@ def run_pipeline(title: str, body: str, candidates: list[FileHit], cutoff: str, 
     budget = budget or Budget.from_config()
     pr = PipelineRun()
 
-    def fail(stage: str, message: str, partial: Run | None = None) -> PipelineError:
+    def fail(stage: str, message: str, partial: Run | None = None, *,
+             limit: str | None = None, value: float | None = None) -> PipelineError:
         if partial is not None:
             pr.runs[stage] = partial  # its spend counts toward the totals
         pr.failed_stage, pr.error = stage, message
-        return PipelineError(message, pr, stage)
+        return PipelineError(message, pr, stage, limit=limit, value=value)
 
-    def stage_budget(stage: str) -> Budget | None:
+    def stage_budget(stage: str) -> tuple[Budget, tuple[str, float] | None]:
         b = Budget(
             max_turns=STAGE_TURNS[stage],
             max_tokens=budget.max_tokens - (pr.input_tokens + pr.output_tokens),
             max_seconds=budget.max_seconds - pr.seconds,
             max_dollars=budget.max_dollars - float(pr.cost_usd),
         )
-        return b if min(b.max_tokens, b.max_seconds, b.max_dollars) > 0 else None
+        # the first remaining limit at or below zero, as (name, remaining)
+        spent = next(((n, v) for n, v in (("tokens", b.max_tokens), ("seconds", b.max_seconds),
+                                          ("dollars", b.max_dollars)) if v <= 0), None)
+        return b, spent
 
     def call(stage: str, **kw) -> Run:
-        b = stage_budget(stage)
-        if b is None:
-            raise fail(stage, f"budget exhausted before the {stage} stage")
+        b, spent = stage_budget(stage)
+        if spent is not None:
+            raise fail(stage, f"budget exhausted before the {stage} stage",
+                       limit=spent[0], value=spent[1])
         t0 = loop._now()
         try:
             return loop.run(title, body, candidates, cutoff, budget=b, client=client,
                             max_turns=b.max_turns, **kw)
+        except BudgetExceeded as exc:
+            raise fail(stage, str(exc), exc.run, limit=exc.limit, value=exc.value) from exc
         except RunError as exc:
             raise fail(stage, str(exc), exc.run) from exc
+        except Exception as exc:  # no partial Run to keep; earlier spend survives in pr.runs
+            raise fail(stage, f"{type(exc).__name__}: {exc}") from exc
         finally:
             pr.seconds += loop._now() - t0
 

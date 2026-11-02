@@ -104,7 +104,9 @@ HYPOTHESIZE_SYSTEM = STRUCTURED_SYSTEM + """
 
 You are the last of three stages. Earlier stages located files and named the
 regions that implement the reported behaviour; their results are given after
-the report as JSON. You have no tools. From those regions alone, decide where
+the report as JSON. You have no tools. The regions were read from the code by the previous stage,
+so they count as evidence alongside the report, despite the statement above that
+you have not read the code. From those regions alone, decide where
 the fault is and how it causes the report: fill `fault` with a path and line
 range inside one of the given regions, and its mechanism. Then rank the files
 the fix would change in `suspected_files`, most likely first, and fill the
@@ -118,8 +120,9 @@ HYPOTHESIZE_TOOLS: list[dict] = []
 
 
 def understand_prompt(title: str, body: str, located: LocateResult) -> str:
+    files = "\n".join(f"- {f.path}: {f.why}" for f in located.files)
     return (f"Title: {title}\n\n{body}\n\n---\n\nLocated files (from the previous stage):\n\n"
-            f"{located.model_dump_json(indent=2)}")
+            f"{files}")
 
 
 def hypothesize_prompt(title: str, body: str, located: LocateResult,
