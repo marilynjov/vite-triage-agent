@@ -46,4 +46,6 @@ def outcome(
     if not fault:
         return "hit", False
     span = [fault["start_line"], fault["end_line"]]
+    if fault["path"] in gold and not regions.get(fault["path"]):
+        return "hit", None  # file-level-only gold file: fault unjudgeable
     return "hit", any(overlaps(span, g) for g in gold_ranges.get(fault["path"], []))

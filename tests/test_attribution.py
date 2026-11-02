@@ -73,5 +73,14 @@ def test_mixed_row_applies_gold_per_file():
     s = stages(locate=("a.py",), regions=(("a.py", 50, 60),))
     assert outcome(s, None, gold, regions) == ("understand_miss", None)
     # fault outside every range: row has region gold, so False not None
-    s = stages(locate=("b.py",), regions=(("b.py", 1, 2),), hyp=("b.py",), fault=("b.py", 1, 2))
+    s = stages(locate=("b.py",), regions=(("b.py", 1, 2),), hyp=("b.py",), fault=("a.py", 50, 60))
+    assert outcome(s, None, gold, regions) == ("hit", False)
+
+
+def test_fault_in_file_level_only_gold_file_is_unjudged():
+    gold = ["a.py", "b.py"]
+    regions = {"a.py": [[10, 20]], "b.py": []}
+    s = stages(locate=("a.py",), regions=(("a.py", 10, 20),), hyp=("a.py",), fault=("b.py", 1, 2))
+    assert outcome(s, None, gold, regions) == ("hit", None)
+    s = stages(locate=("a.py",), regions=(("a.py", 10, 20),), hyp=("a.py",), fault=("c.py", 1, 2))
     assert outcome(s, None, gold, regions) == ("hit", False)
