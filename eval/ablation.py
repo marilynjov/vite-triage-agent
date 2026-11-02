@@ -77,6 +77,9 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
 
     regions maps issue -> {gold_file: [[start, end], ...]}; it is read only by the
     staged arm, and a missing issue counts as no regions (file-level gold)."""
+    if arm.kind == "pipeline" and regions is None:
+        raise ValueError("the staged arm needs gold regions (pass regions={} to judge "
+                         "every row at file level on purpose)")
     paths = [getattr(c, "path", c) for c in candidates]
     gold = set(row["gold_files"])
     picked: list[str] = []
@@ -88,6 +91,7 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
     stages: dict = {"locate": None, "understand": None, "hypothesis": None}
     stage_costs: dict = {}
     failed_stage = None
+    infra = False
     started = time.perf_counter()
     try:
         if pipeline:
@@ -105,9 +109,13 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
     except RunError as exc:
         error = str(exc)
         error_kind = "api" if error.startswith("API error") else "run"
+        cause = exc.__cause__
+        infra = arm.kind == "pipeline" and cause is not None and not isinstance(cause, RunError)
+        if infra:  # run_pipeline wrapped an infrastructure exception: retry, not a result
+            error_kind = "api"
         turns, trace, cost = exc.run.turns, exc.run.trace, float(exc.run.cost_usd)
         if pipeline:
-            failed_stage = getattr(exc, "stage", None)
+            failed_stage = None if infra else getattr(exc, "stage", None)
             stages, stage_costs = _stages(exc.run), dict(exc.run.stage_costs)
     except Exception as exc:  # infrastructure, not the arm's fault
         error, error_kind = f"{type(exc).__name__}: {exc}", "api"
@@ -128,7 +136,7 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
     }
     if pipeline:
         gold_regions = (regions or {}).get(row["issue"]) or {}
-        if error_kind == "api" and failed_stage is None:  # infrastructure: nothing to attribute
+        if error_kind == "api" and (failed_stage is None or infra):  # nothing to attribute
             out, fault_hit = None, None
         else:
             out, fault_hit = attribute(stages, failed_stage, list(row["gold_files"]),
@@ -168,6 +176,8 @@ def run_jobs(jobs: list[Job], path: Path, *, workers: int = 4,
     Once the actual spend passes cap_dollars no new job starts; jobs already in
     flight finish and are recorded. Skipped jobs are left for a resume."""
     path = Path(path)
+    if regions is None and any(j.arm.kind == "pipeline" for j in jobs):
+        raise ValueError("staged jobs need gold regions; run_jobs got regions=None")
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = threading.Lock()
     state = {"ran": 0, "spent": 0.0, "stopped_for_cap": False}

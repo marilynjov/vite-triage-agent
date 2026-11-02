@@ -203,6 +203,11 @@ def file_level_only_count(records, arm=STAGED, subset="clean"):
     return sum(bool(r.get("file_level_only")) for r in _outcome_rows(records, arm, subset))
 
 
+def file_level_only_issues(records, arm=STAGED, subset="clean"):
+    return len({r["issue"] for r in _outcome_rows(records, arm, subset)
+                if r.get("file_level_only")})
+
+
 def fault_hit_rate(records, arm=STAGED, subset="clean"):
     """Share of fault_hit True among hits that were judged (None excluded), or None."""
     judged = [r["fault_hit"] for r in _outcome_rows(records, arm, subset)
@@ -284,7 +289,8 @@ def markdown(records) -> str:
         L += ["| outcome | share |", "|---|---|"]
         L += [f"| {o} | {m:.3f} ({lo:.3f}-{hi:.3f}) |" for o, (m, lo, hi) in t.items()]
     L += ["", f"Fails most (clean): {fails_most(records)}",
-          f"Rows judged at file level only (clean): {file_level_only_count(records)}",
+          f"Runs judged at file level only (clean): {file_level_only_count(records)} "
+          f"({file_level_only_issues(records)} distinct issues)",
           f"Fault hit rate among judged hits (clean): {_f(fault_hit_rate(records))}"]
     L += ["", f"**Chosen arm: {choose_arm(records)}**"]
     return "\n".join(L)

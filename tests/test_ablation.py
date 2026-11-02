@@ -389,7 +389,7 @@ def test_retrieval_failure_on_staged_never_runs_the_pipeline(tmp_path):
     def real(*a, **k):
         raise AssertionError("pipeline must not run")
     job = ablation.Job(ARMS["staged"], ROW, 0, "val", boom)
-    ablation.run_jobs([job], tmp_path / "r.jsonl", workers=1, pipeline_fn=real)
+    ablation.run_jobs([job], tmp_path / "r.jsonl", workers=1, pipeline_fn=real, regions={})
     rec = json.loads((tmp_path / "r.jsonl").read_text())
     assert rec["error_kind"] == "api" and "index gone" in rec["error"] and rec["cost_usd"] == 0
 
@@ -397,3 +397,33 @@ def test_retrieval_failure_on_staged_never_runs_the_pipeline(tmp_path):
 def test_staged_prior_cost():
     job = ablation.Job(ARMS["staged"], ROW, 0, "val", lambda: [])
     assert ablation.estimate_cost([job], []) == pytest.approx(0.010)
+
+
+def test_staged_wrapped_infrastructure_error_is_api():
+    def fn(*a, **k):
+        try:
+            raise ConnectionError("down")
+        except ConnectionError as c:
+            raise PipelineError("ConnectionError: down", _pipeline_run(hyp=False), "locate") from c
+    r = _staged(fn)
+    assert r["error_kind"] == "api" and r["outcome"] is None and r["failed_stage"] is None
+    assert r["cost_usd"] > 0
+    assert ablation.done_keys([r]) == set()
+
+
+def test_staged_run_error_cause_stays_run():
+    def fn(*a, **k):
+        try:
+            raise RunError("cap", _pipeline_run())
+        except RunError as c:
+            raise PipelineError("cap", _pipeline_run(hyp=False), "understand") from c
+    r = _staged(fn)
+    assert r["error_kind"] == "run" and r["outcome"] == "error:understand"
+
+
+def test_staged_without_regions_raises(tmp_path):
+    with pytest.raises(ValueError):
+        ablation.make_record(ARMS["staged"], ROW, 0, [], "val", pipeline_fn=lambda *a, **k: 1)
+    job = ablation.Job(ARMS["staged"], ROW, 0, "val", lambda: [])
+    with pytest.raises(ValueError):
+        ablation.run_jobs([job], tmp_path / "r.jsonl")

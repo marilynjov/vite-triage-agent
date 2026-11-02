@@ -254,8 +254,9 @@ def test_report_survives_mixed_records():
     old = [rec("grounded", i, r, r1=1.0) for i in range(3) for r in range(2)]
     old += [rec("agent", i, r, r1=1.0, calls=[]) for i in range(3) for r in range(2)]
     text = R.markdown(old + _staged_set())
-    assert "Fails most (clean): locate_miss" in text or "Fails most (clean): hypothesize_miss" in text
-    assert "Rows judged at file level only (clean): 0" in text
+    # locate_miss and hypothesize_miss tie at 0.25; the tie goes to the later pipeline stage
+    assert "Fails most (clean): hypothesize_miss" in text
+    assert "Runs judged at file level only (clean): 0 (0 distinct issues)" in text
     assert "Fault hit rate among judged hits (clean): 0.500" in text
     assert "Chosen arm" in text
     assert R.markdown(old)  # no staged records at all
@@ -265,7 +266,7 @@ def test_file_level_only_count_and_api_records_excluded():
     recs = [srec(1, "hit", fl=True), srec(2, "hit", fl=False),
             srec(3, None, kind="api")]
     text = R.markdown(recs)
-    assert "Rows judged at file level only (clean): 1" in text
+    assert "Runs judged at file level only (clean): 1 (1 distinct issues)" in text
     assert R.outcome_table(recs)["hit"][0] == 1.0
 
 
@@ -276,3 +277,10 @@ def test_staged_against_agent_line():
     assert "Staged against agent (clean" in text
     assert "| agent -> staged | 4 | 4 | 0 | 0 | +1.000 |" in text
     assert "| grounded -> staged |" in text
+
+
+def test_api_outcome_records_are_not_counted():
+    recs = [srec(1, "hit"), srec(2, "error:locate", kind="api"),
+            srec(3, "error:locate", kind="api")]
+    assert "error:locate" not in R.outcome_table(recs)
+    assert R.fails_most(recs) == "n/a"
