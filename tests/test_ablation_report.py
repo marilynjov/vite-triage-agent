@@ -250,6 +250,17 @@ def test_fails_most_picks_the_largest_miss():
     assert R.fails_most([]) == "n/a"
 
 
+def test_fails_most_stage_sums_miss_and_error():
+    # locate_miss is the single largest outcome, but understand's miss + error is larger
+    recs = [srec(1, "locate_miss", 0), srec(2, "locate_miss", 0), srec(3, "understand_miss", 0),
+            srec(4, "error:understand", 0), srec(5, "error:understand", 0), srec(6, "hit", 0)]
+    assert R.fails_most(recs) in ("locate_miss", "error:understand")
+    assert R.stage_failures(recs) == pytest.approx({"locate": 2 / 6, "understand": 3 / 6})
+    assert R.fails_most_stage(recs) == "understand"
+    assert R.fails_most_stage([srec(1, "hit")]) == "n/a"
+    assert "Fails most by stage, miss + error (clean): understand" in R.markdown(recs)
+
+
 def test_report_survives_mixed_records():
     old = [rec("grounded", i, r, r1=1.0) for i in range(3) for r in range(2)]
     old += [rec("agent", i, r, r1=1.0, calls=[]) for i in range(3) for r in range(2)]

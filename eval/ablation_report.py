@@ -199,6 +199,26 @@ def fails_most(records, arm=STAGED):
     return max(misses, key=lambda o: (misses[o], -list(misses).index(o)))
 
 
+STAGE_OF = {"locate_miss": "locate", "error:locate": "locate",
+            "understand_miss": "understand", "error:understand": "understand",
+            "hypothesize_miss": "hypothesize", "error:hypothesize": "hypothesize"}
+
+
+def stage_failures(records, arm=STAGED, subset="clean"):
+    """Clean mean share of runs lost at each stage: its miss plus its errors."""
+    out = {}
+    for o, (m, _, _) in outcome_table(records, arm, subset).items():
+        if o in STAGE_OF:
+            out[STAGE_OF[o]] = out.get(STAGE_OF[o], 0.0) + m
+    return out
+
+
+def fails_most_stage(records, arm=STAGED):
+    """The stage (miss + error) with the largest clean mean share, or 'n/a'."""
+    s = stage_failures(records, arm)
+    return max(s, key=s.get) if s else "n/a"
+
+
 def file_level_only_count(records, arm=STAGED, subset="clean"):
     return sum(bool(r.get("file_level_only")) for r in _outcome_rows(records, arm, subset))
 
@@ -288,7 +308,10 @@ def markdown(records) -> str:
             continue
         L += ["| outcome | share |", "|---|---|"]
         L += [f"| {o} | {m:.3f} ({lo:.3f}-{hi:.3f}) |" for o, (m, lo, hi) in t.items()]
+    by_stage = ", ".join(f"{k} {v:.3f}" for k, v in stage_failures(records).items())
     L += ["", f"Fails most (clean): {fails_most(records)}",
+          f"Fails most by stage, miss + error (clean): {fails_most_stage(records)}"
+          + (f" ({by_stage})" if by_stage else ""),
           f"Runs judged at file level only (clean): {file_level_only_count(records)} "
           f"({file_level_only_issues(records)} distinct issues)",
           f"Fault hit rate among judged hits (clean): {_f(fault_hit_rate(records))}"]
