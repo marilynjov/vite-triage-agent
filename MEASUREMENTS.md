@@ -636,43 +636,42 @@ arms on every val row, one repeat each: `retrieval` (no model), `grounded`, and
 `agent`. 618 records, $1.0064 in total, 3 run errors (all in `agent`), 0 api
 errors. `PROVIDER=anthropic python -m eval.ablation --arms retrieval,grounded,agent --split val --n 206 --repeats 1 --max-dollars 3`.
 Everything below is the output of
-`python -m eval.ablation --report data/runs/val-n206-r1.jsonl`, except the
-`retrieval` row, which that report does not print (see the note under the
-table).
+`python -m eval.ablation --report data/runs/val-n206-r1.jsonl`.
 
 **Scores** (one repeat, so no min-max spread; flip rate is n/a):
 
 | arm | subset | runs | recall@1 | recall@5 | MRR |
 |---|---|---|---|---|---|
+| retrieval | clean (n=175) | 175 | 0.241 | 0.540 | 0.438 |
 | grounded | clean (n=175) | 175 | 0.452 | 0.584 | 0.602 |
 | agent | clean (n=175) | 175 | 0.531 | 0.671 | 0.683 |
+| retrieval | all | 206 | 0.261 | 0.570 | 0.464 |
 | grounded | all | 206 | 0.481 | 0.614 | 0.637 |
 | agent | all | 206 | 0.553 | 0.695 | 0.708 |
 
-The report prints no `retrieval` row, so there are no `retrieval` numbers from
-this run to quote. The earlier "Grounded triage on the full val split" section
-above scored retrieval's candidate order on the same 206 rows: clean recall@1
-24.1%, recall@5 54.0%, MRR 43.8%; all rows recall@1 26.1%, MRR 46.4%. Those are
-that section's numbers, not this run's.
+The `retrieval` row is the candidate order with no model call.
 
-**Paired comparison, `agent` against `grounded`** (recall@1, 95% bootstrap over
-issues, same method as the 40-row section):
+**Paired comparisons** (recall@1, b against a, 95% bootstrap over issues, same
+method as the 40-row section):
 
-| subset | issues | wins | losses | ties | diff | 95% interval | verdict |
-|---|---|---|---|---|---|---|---|
-| clean | 175 | 22 | 8 | 145 | +0.080 | [+0.026, +0.134] | counts |
-| all | 206 | 25 | 10 | 171 | +0.072 | [+0.023, +0.124] | counts |
-
-The report prints no paired comparison against `retrieval`, so none is given.
+| comparison | subset | issues | wins | losses | ties | diff | 95% interval | verdict |
+|---|---|---|---|---|---|---|---|---|
+| retrieval -> agent | clean | 175 | 62 | 5 | 108 | +0.290 | [+0.216, +0.364] | counts |
+| retrieval -> grounded | clean | 175 | 49 | 6 | 120 | +0.211 | [+0.141, +0.280] | counts |
+| grounded -> agent | clean | 175 | 22 | 8 | 145 | +0.080 | [+0.026, +0.134] | counts |
+| retrieval -> agent | all | 206 | 75 | 7 | 124 | +0.293 | [+0.222, +0.363] | counts |
+| retrieval -> grounded | all | 206 | 60 | 7 | 139 | +0.220 | [+0.156, +0.285] | counts |
+| grounded -> agent | all | 206 | 25 | 10 | 171 | +0.072 | [+0.023, +0.124] | counts |
 
 **Cost.**
 
 | arm | $/triage | $/correct | p50 ms | p95 ms | run errors | api errors |
 |---|---|---|---|---|---|---|
+| retrieval | 0.0000 | 0.0000 | 0 | 0 | 0 | 0 |
 | grounded | 0.0018 | 0.0031 | 6224 | 8636 | 0 | 0 |
 | agent | 0.0031 | 0.0048 | 7270 | 12162 | 3 | 0 |
 
-`retrieval` is free. `agent` costs more per triage ($0.0031 against $0.0018)
+`retrieval` is free (no model call). `agent` costs more per triage ($0.0031 against $0.0018)
 and per correct answer ($0.0048 against $0.0031).
 
 **Tool use (`agent`).** 38% of runs used a tool (0.38). Turns per run:
@@ -680,10 +679,11 @@ mean 1.7, median 1, max 7. Calls by tool: grep 107, read_file 53, list_dir 6,
 git_log 1. Tool error rate 0.01. The share of final picks that appeared in tool
 output ("picks seen") is 0.24.
 
-**Gate verdict.** Agency paid for itself: on the 206 val rows `agent` raised
-clean recall@1 from 0.452 to 0.531 (+0.080, interval [+0.026, +0.134]) over
-`grounded`, for $0.0031 per triage against $0.0018 and $0.0048 per correct
-answer against $0.0031.
+**Gate verdict.** On the 206 val rows `agent` scores higher clean recall@1 than
+retrieval alone (0.531 against 0.241, +0.290, interval [+0.216, +0.364]) and
+than `grounded` (0.531 against 0.452, +0.080, interval [+0.026, +0.134]), at
+about 1.7 times `grounded`'s cost per triage ($0.0031 against $0.0018) and
+about 1.5 times its cost per correct answer ($0.0048 against $0.0031).
 
 The sign, size and verdict match the 40-row stage (+0.099 on its clean rows),
 and the all-rows subset agrees (+0.072, interval excludes zero). The interval is
@@ -706,5 +706,5 @@ losses: the gain is a net of 14 issues, and 145 of 175 issues did not change.
   206). Clean is the subset quoted; the all-rows numbers are given for
   completeness.
 - File-level scoring, as everywhere in Phase 03.
-- Three `agent` runs ended in a run error; the report still prints 206 runs
-  for `agent`, and this write-up does not say how those three were scored.
+- Three `agent` runs ended in a run error, all on clean rows. They score
+  recall@1 = 0, so the `agent` figure is conservative.

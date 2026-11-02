@@ -67,7 +67,7 @@ comparable. The test split stays sealed until Phase 07.
 | `python -m eval.classify --n 40` | Phase 02 issue type, severity, components | free locally |
 | `PROVIDER=anthropic python -m eval.grounded --n 40` | the model re-ranking retrieval's top 10 | ~$0.07 |
 | `PROVIDER=anthropic python -m eval.agent --n 40` | retrieval vs grounded vs the tool agent | ~$0.18 |
-| `PROVIDER=anthropic python -m eval.ablation --arms … --n 40 --repeats 3` | the Phase 05a arms (retrieval, grounded, agent-no-tools, agent, agent-look) on the same rows, written to `data/runs/` | ~$1.20 |
+| `PROVIDER=anthropic python -m eval.ablation --arms retrieval,grounded,agent-no-tools,agent,agent-look --n 40 --repeats 3` | the Phase 05a arms (retrieval, grounded, agent-no-tools, agent, agent-look) on the same rows, written to `data/runs/` | ~$1.20 |
 | `python -m eval.ablation --report PATH` | scores, paired intervals, cost and tool use from a run file | free |
 | `PROVIDER=anthropic python -m agent.explain <issue#>` | one run's message array, turn by turn | ~$0.01 |
 | `python -m pytest -q` | the test suite; no paid calls | free |
