@@ -118,6 +118,13 @@ class RunRegistry:
         # Waiting is real time even when tests inject a fake registry clock.
         return time.monotonic()
 
+    def set_task(self, run_id: str, task: Any) -> None:
+        """Keep the server-owned task referenced by its run."""
+        with self._cond:
+            run = self._runs.get(run_id)
+            if run is not None:
+                run.task = task
+
     def get(self, run_id: str) -> LiveRun | None:
         with self._cond:
             self._evict()
