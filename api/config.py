@@ -45,6 +45,21 @@ GROUNDED_K = int(os.getenv("GROUNDED_K", "10"))
 
 # Runaway guard for the tool-use loop: the most API calls one triage may make.
 AGENT_MAX_TURNS = int(os.getenv("AGENT_MAX_TURNS", "12"))
+# The other three limits of the same guard, checked before every call after the first.
+# Input plus output tokens summed over the run.
+AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "150000"))
+# Wall-clock seconds since the run started.
+AGENT_MAX_SECONDS = float(os.getenv("AGENT_MAX_SECONDS", "180"))
+# Dollars spent so far in the run.
+AGENT_MAX_DOLLARS = float(os.getenv("AGENT_MAX_DOLLARS", "0.05"))
+
+# Live run registry (the streamed POST /runs runs).
+# Most runs that may be "running" at once; a further start is refused.
+LIVE_MAX_CONCURRENT = int(os.getenv("LIVE_MAX_CONCURRENT", "2"))
+# Seconds a finished run stays replayable before it is evicted.
+LIVE_TTL_SECONDS = float(os.getenv("LIVE_TTL_SECONDS", "900"))
+# Seconds of silence on an SSE stream before a keepalive comment is sent.
+LIVE_KEEPALIVE_SECONDS = float(os.getenv("LIVE_KEEPALIVE_SECONDS", "15"))
 
 SCHEMA_SQL = Path(__file__).resolve().parent / "schema.sql"
 

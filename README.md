@@ -21,7 +21,7 @@ the top k the system proposed?
 | 03 Retrieval | chunking, embeddings in pgvector, the recall@k harness | recall@10 64.1% → 68.5% from a path + imports header |
 | 03→04 Grounded triage | the model re-ranks retrieval's top 10 | recall@1 24.1% → 44.5% (206 rows) |
 | 04 Tools | four git tools at the pinned commit, a hand-written tool-use loop, `/triage/agent`, a trace in the UI | recall@1 41.5% vs grounded 30.4% (40 rows), but 26/40 runs used no tools |
-| 05 The agent loop | in progress: first, [does looking pay?](docs/superpowers/specs/2026-11-01-phase-05a-does-looking-pay-design.md) | clean recall@1 on 206 rows: 24.1% retrieval, 45.2% grounded, 53.1% agent (agent vs grounded paired interval excludes 0), $0.0031 vs $0.0018 per triage |
+| 05 The agent loop | Piece A, [does looking pay?](docs/superpowers/specs/2026-11-01-phase-05a-does-looking-pay-design.md), is answered; Pieces B+C are done: a live run streamed to the UI, and token, time and dollar budgets ([spec](docs/superpowers/specs/2026-11-01-phase-05bc-live-run-design.md)) | clean recall@1 on 206 rows: 24.1% retrieval, 45.2% grounded, 53.1% agent (agent vs grounded paired interval excludes 0), $0.0031 vs $0.0018 per triage |
 
 Every number, with its caveats, is in [MEASUREMENTS.md](MEASUREMENTS.md). How
 the pieces fit and why each boundary is where it is: [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -48,13 +48,26 @@ Run the app:
 
 ```bash
 PROVIDER=anthropic python -m uvicorn api.main:app --port 8000 --reload
-cd web && npm install && npm run dev            # http://localhost:5173
+cd web && npm ci && npm run dev                 # http://localhost:5173
 ```
 
 The page has three buttons. **Prose (Phase 01)** and **Typed triage** see only
-the issue. **Agent (Phase 04)** also gets retrieval's top 10 files and four read-only tools, and shows each
-tool call it made. `/triage/agent` needs `PROVIDER=anthropic`; the other
-routes also run on the free local model (`PROVIDER=ollama`).
+the issue. **Agent (live)** also gets retrieval's top 10 files and four read-only tools,
+and runs in the background: you watch the trace fill in as it goes (each tool
+call and its result), with meters for turns, tokens, dollars and seconds
+against their limits, then the result. Reload the page and a run the server
+still remembers reopens. It needs `PROVIDER=anthropic`; the other two buttons
+also run on the free local model (`PROVIDER=ollama`).
+
+A run stops when it reaches a budget, set in `.env`: `AGENT_MAX_TURNS` (12),
+`AGENT_MAX_TOKENS` (150000), `AGENT_MAX_SECONDS` (180) and `AGENT_MAX_DOLLARS`
+(0.05). They are checked before each model call after the first, so a run can
+overshoot a limit by at most one call. `LIVE_MAX_CONCURRENT`, `LIVE_TTL_SECONDS`
+and `LIVE_KEEPALIVE_SECONDS` size the live-run registry. Restarting the API
+drops runs that are in progress.
+
+Use `npm ci`, not `npm install`: the lockfile was created with
+`--legacy-peer-deps` because npm 10.9.2 crashes on a plain install.
 
 ## Measuring
 
@@ -71,6 +84,7 @@ comparable. The test split stays sealed until Phase 07.
 | `python -m eval.ablation --report PATH` | scores, paired intervals, cost and tool use from a run file | free |
 | `PROVIDER=anthropic python -m agent.explain <issue#>` | one run's message array, turn by turn | ~$0.01 |
 | `python -m pytest -q` | the test suite; no paid calls | free |
+| `cd web && npm ci && npm test` | the frontend tests (Vitest), including the live-trace reducer | free |
 
 ## Another repo
 
