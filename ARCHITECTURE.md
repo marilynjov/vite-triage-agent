@@ -201,7 +201,7 @@ route ─► triage.py (owns the prompt) ─► providers.complete[_structured] 
 - **Routes.** `POST /triage/{naive,structured,grounded,agent}` and `POST /runs`
   make model calls. `GET /runs/limits`, `GET /runs/{id}` and
   `GET /runs/{id}/events` read a live run (section 8). `GET /calls`,
-  `/retrieve`, `/corpora` and `/health` make none.
+  `POST /retrieve`, `GET /corpora` and `GET /health` make none.
 - **Cost is computed, not estimated.** `cost.py` prices the token counts the
   provider reports, at four rates (input, output, cache write, cache read).
   Local models cost $0.
