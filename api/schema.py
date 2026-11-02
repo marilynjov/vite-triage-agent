@@ -84,6 +84,58 @@ class GroundedTriageResult(TriageResult):
     suspected_files: list[str] = Field(max_length=5)
 
 
+class LocatedFile(BaseModel):
+    """A file the locate stage names, with why and what it saw there."""
+
+    model_config = {"extra": "forbid"}
+
+    path: str
+    why: str
+    evidence: str
+
+
+class LocateResult(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    reasoning: str
+    files: list[LocatedFile] = Field(min_length=1, max_length=5)
+
+
+class Region(BaseModel):
+    """A span of a located file that implements the reported behaviour."""
+
+    model_config = {"extra": "forbid"}
+
+    path: str
+    symbol: str | None
+    start_line: int
+    end_line: int
+    what_it_does: str
+    relevance: str
+
+
+class UnderstandResult(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    reasoning: str
+    regions: list[Region] = Field(min_length=1, max_length=6)
+
+
+class Fault(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    path: str
+    start_line: int
+    end_line: int
+    mechanism: str
+
+
+class HypothesisResult(GroundedTriageResult):
+    """The hypothesize stage's result: the triage fields plus where the fault is."""
+
+    fault: Fault
+
+
 class ToolCall(BaseModel):
     """One tool call the agent made: what it asked, what came back, how long it took."""
 
