@@ -120,3 +120,26 @@ def test_budget_from_config_reads_the_env(monkeypatch):
     monkeypatch.setenv("AGENT_MAX_TOKENS", "1234")
     b = loop.Budget.from_config()
     assert b.max_dollars == 0.2 and b.max_tokens == 1234
+
+
+def test_last_turn_over_another_cap_reports_that_cap():
+    # 20 tokens per turn: under 25 after turn 1, over it after turn 2 (the last allowed)
+    events, _, err = _go(_tool_turn("t1"), _tool_turn("t2"),
+                         budget=_budget(max_turns=2, max_tokens=25))
+    assert err.limit == "tokens" and len(err.run.turns) == 2
+    assert events[-1]["limit"] == "tokens"
+
+
+def test_last_turn_alone_still_reports_turns():
+    _, _, err = _go(_tool_turn("t1"), _tool_turn("t2"), budget=_budget(max_turns=2))
+    assert err.limit == "turns" and "no final answer after 2 turns" in str(err)
+
+
+def test_callback_errors_are_logged_not_raised(caplog):
+    def boom(event):
+        raise RuntimeError("contract mismatch")
+    with caplog.at_level("ERROR"):
+        out = loop.run("t", "b", [_hit()], CUTOFF, client=FakeClient(_final([CSS])),
+                       budget=_budget(), on_event=boom)
+    assert out.result is not None
+    assert "live event callback failed" in caplog.text

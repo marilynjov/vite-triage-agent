@@ -20,6 +20,7 @@ Two rules the API enforces and this loop obeys:
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -145,7 +146,7 @@ def _emit(on_event: Callable[[dict], None] | None, event: dict) -> None:
     try:
         on_event(event)
     except Exception:
-        pass
+        logging.getLogger(__name__).exception("live event callback failed")
 
 
 def _totals(out: Run, t0: float) -> dict:
@@ -211,10 +212,11 @@ def run(
 
     def over_budget() -> BudgetExceeded | None:
         totals = _totals(out, t0)
-        checks = (("turns", totals["turns"], max_turns),
-                  ("tokens", totals["tokens"], budget.max_tokens),
+        # turns last: when the final turn also tripped another cap, name that cap
+        checks = (("tokens", totals["tokens"], budget.max_tokens),
                   ("seconds", totals["seconds"], budget.max_seconds),
-                  ("dollars", totals["cost_usd"], budget.max_dollars))
+                  ("dollars", totals["cost_usd"], budget.max_dollars),
+                  ("turns", totals["turns"], max_turns))
         for limit, used, cap in checks:
             if used >= cap:
                 msg = (f"no final answer after {cap} turns" if limit == "turns"
@@ -296,5 +298,7 @@ def run(
         raise fail(RunError(
             f"unexpected stop_reason {response.stop_reason!r} on turn {turn}", out), "run")
 
-    raise fail(BudgetExceeded(f"no final answer after {max_turns} turns", out,
-                              limit="turns", value=max_turns), "budget")
+    # turns == max_turns here, so over_budget() is never None
+    stop = over_budget()
+    assert stop is not None
+    raise fail(stop, "budget")
