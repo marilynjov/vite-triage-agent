@@ -162,8 +162,11 @@ Each run is one JSONL record in `data/runs/<split>-n<N>-r<R>.jsonl`: `arm`,
 `picked`, `recall_at_1`, `recall_at_5`, `rr`, `turns`, `tool_calls`,
 `input_tokens`, `output_tokens`, `cost_usd`, `latency_ms`, `error` and
 `error_kind`. The file is the source of truth: the run resumes from it, a
-spend cap (`--max-dollars`) is checked against it, and the report is computed
-from it alone, so reading results costs nothing:
+spend cap (`--max-dollars`) bounds the file's lifetime spend (the sum of
+`cost_usd` over every record in it, errors included): the run refuses to start
+if that sum plus the estimate exceeds the cap, and stops starting new jobs once
+the file's total passes it, so resumes cannot each spend a fresh cap. The report
+is computed from the file alone, so reading results costs nothing:
 `python -m eval.ablation --report PATH`. Differences between arms are paired
 bootstrap intervals over issues, on `clean` rows.
 

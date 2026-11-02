@@ -210,7 +210,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--report", metavar="PATH",
                     help="print the report for an existing run file and exit")
     ap.add_argument("--max-dollars", type=float, default=3.0,
-                    help="refuse to start if the estimate exceeds this; stop if spend passes it")
+                    help="cap on the run file's lifetime spend: refuse to start if what the "
+                         "file already spent plus the estimate exceeds it; stop if the total passes it")
     args = ap.parse_args(argv)
     if args.report:
         from . import ablation_report
@@ -234,15 +235,20 @@ def main(argv: list[str] | None = None) -> None:
     jobs = pending_jobs([ARMS[a] for a in names], val_rows(args.split, args.n),
                         args.repeats, args.split, done_keys(existing))
     estimate = estimate_cost(jobs, existing)
-    print(f"  {path}: {len(existing)} records, {len(jobs)} to run, "
-          f"estimated ${estimate:.2f} (cap ${args.max_dollars:.2f})")
-    if estimate > args.max_dollars:
-        sys.exit(f"estimate ${estimate:.2f} exceeds --max-dollars {args.max_dollars}; "
+    # every record was paid for, errors included; the cap bounds the file, not this invocation
+    spent_before = sum(r.get("cost_usd") or 0.0 for r in existing)
+    print(f"  {path}: {len(existing)} records, {len(jobs)} to run")
+    print(f"  estimate ${estimate:.2f} + ${spent_before:.2f} already spent in this file = "
+          f"${estimate + spent_before:.2f} (cap ${args.max_dollars:.2f} for this file)")
+    if spent_before + estimate > args.max_dollars:
+        sys.exit(f"estimate ${estimate:.2f} + ${spent_before:.2f} already spent exceeds "
+                 f"--max-dollars {args.max_dollars} for this file; "
                  "raise it or shrink --n/--repeats/--arms")
-    out = run_jobs(jobs, path, cap_dollars=args.max_dollars)
+    out = run_jobs(jobs, path, cap_dollars=args.max_dollars - spent_before)
     print(f"  ran {out['ran']}   ${out['spent']:.2f}")
     if out["stopped_for_cap"]:
-        print(f"  stopped: spend passed ${args.max_dollars:.2f}; rerun to resume the rest")
+        print(f"  stopped: the file's total spend passed ${args.max_dollars:.2f}; "
+              "raise --max-dollars to resume the rest")
 
 
 if __name__ == "__main__":

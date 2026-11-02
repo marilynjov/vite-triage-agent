@@ -225,3 +225,53 @@ def test_no_cap_means_not_stopped(tmp_path):
     out = ablation.run_jobs(_jobs("agent", 2), tmp_path / "r.jsonl", workers=1,
                             run_fn=_fake(["b"]))
     assert out["ran"] == 2 and out["stopped_for_cap"] is False
+
+
+def _file_with_spend(tmp_path, dollars, name="x"):
+    rec = {"arm": "grounded", "issue": 999, "repeat": 0, "cost_usd": dollars,
+           "error_kind": "run", "split": "val"}
+    (tmp_path / f"{name}.jsonl").write_text(json.dumps(rec) + "\n")
+
+
+def _cli_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(ablation, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(ablation.C, "PROVIDER", "anthropic")
+    monkeypatch.setattr(ablation, "val_rows",
+                        lambda split, n: [{**ROW, "issue": i} for i in range(n)])
+
+
+def test_cli_cap_bounds_the_files_lifetime_spend(tmp_path, monkeypatch, capsys):
+    _cli_env(tmp_path, monkeypatch)
+    _file_with_spend(tmp_path, 2.90)
+
+    def boom(*a, **k):
+        raise AssertionError("must refuse before running")
+    monkeypatch.setattr(ablation, "run_jobs", boom)
+    # 70 agent jobs at the 0.0029 prior is about $0.20: fine alone, over the cap with $2.90 spent
+    with pytest.raises(SystemExit):
+        ablation.main(["--arms", "agent", "--n", "70", "--repeats", "1", "--name", "x",
+                       "--max-dollars", "3"])
+    assert "already spent in this file" in capsys.readouterr().out
+
+
+def test_cli_passes_remaining_budget_to_run_jobs(tmp_path, monkeypatch, capsys):
+    _cli_env(tmp_path, monkeypatch)
+    _file_with_spend(tmp_path, 2.98)
+    seen = {}
+
+    def fake_run_jobs(jobs, path, *, cap_dollars=None, **k):
+        seen["cap"] = cap_dollars
+        return {"ran": 0, "spent": 0.0, "stopped_for_cap": False}
+    monkeypatch.setattr(ablation, "run_jobs", fake_run_jobs)
+    ablation.main(["--arms", "agent", "--n", "1", "--repeats", "1", "--name", "x",
+                   "--max-dollars", "3"])
+    assert seen["cap"] == pytest.approx(0.02)
+    assert "cap $3.00 for this file" in capsys.readouterr().out
+
+
+def test_resume_stops_once_file_total_passes_cap(tmp_path):
+    # file already holds $2.98; remaining budget 0.02; each run costs 0.01
+    out = ablation.run_jobs(_jobs("agent", 10), tmp_path / "r.jsonl", workers=1,
+                            cap_dollars=3.0 - 2.98, run_fn=_fake(["b"]))
+    assert out["stopped_for_cap"] is True
+    assert 2.98 + out["spent"] > 3.0 and 2.98 + out["spent"] <= 3.0 + 0.011
