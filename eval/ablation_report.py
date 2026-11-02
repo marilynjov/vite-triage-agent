@@ -12,6 +12,10 @@ Conventions, fixed before the data came in:
 - Comparisons are paired by issue (repeats averaged within an issue) with a
   percentile bootstrap over issues: 10,000 resamples, seed 0, 95% interval.
   A difference counts only if the interval excludes zero.
+- Percentiles (bootstrap and latency) use linear interpolation, the numpy default.
+- choose_arm ties on clean recall@1 go to the first arm in AGENT_ARMS order.
+- Weighting: scores weight repeats equally (mean of per-repeat means); paired
+  comparisons weight issues equally (repeats averaged within an issue first).
 """
 from __future__ import annotations
 
@@ -25,8 +29,9 @@ from .ablation import load_records
 from .arms import MODEL_ARMS
 
 METRICS = ("recall_at_1", "recall_at_5", "rr")
-AGENT_ARMS = ("agent-no-tools", "agent", "agent-look")
-BASELINE = "grounded"
+BASELINE = MODEL_ARMS[0]
+AGENT_ARMS = tuple(a for a in MODEL_ARMS if a != BASELINE)
+CHAIN = tuple(zip(MODEL_ARMS, MODEL_ARMS[1:]))
 EPS = 1e-12
 
 
@@ -164,7 +169,7 @@ def markdown(records) -> str:
     arms = [BASELINE, *AGENT_ARMS]
     L = []
     L += ["## Scores (mean over repeats; min-max across repeats)", "",
-          "| arm | subset | n | recall@1 | recall@5 | MRR | flip rate |",
+          "| arm | subset | runs | recall@1 | recall@5 | MRR | flip rate |",
           "|---|---|---|---|---|---|---|"]
     for arm in arms:
         for sub in ("all", "clean"):
@@ -176,17 +181,23 @@ def markdown(records) -> str:
             n = len(_use(records, arm, sub))
             L.append(f"| {arm} | {sub} | {n} | " + " | ".join(cells)
                      + f" | {_f(flip_rate(records, arm, sub))} |")
-    L += ["", "## Paired against grounded (clean, recall@1, 95% bootstrap over issues)", "",
-          "| arm | issues | wins | losses | ties | diff | 95% interval | excludes 0 |",
-          "|---|---|---|---|---|---|---|---|"]
-    for arm in AGENT_ARMS:
-        p = paired(records, BASELINE, arm)
-        if p is None:
-            L.append(f"| {arm} | 0 | no data | | | | | |")
-            continue
-        sig = "yes" if p["ci_low"] > 0 or p["ci_high"] < 0 else "no"
-        L.append(f"| {arm} | {p['n']} | {p['wins']} | {p['losses']} | {p['ties']} | "
-                 f"{p['diff']:+.3f} | [{p['ci_low']:+.3f}, {p['ci_high']:+.3f}] | {sig} |")
+    for title, pairs in (("Chain: each arm against the one before it", CHAIN),
+                         ("Each agent arm against grounded",
+                          [(BASELINE, x) for x in AGENT_ARMS])):
+        for sub in ("clean", "all"):
+            L += ["", f"## {title} ({sub}, recall@1, b vs a, 95% bootstrap over issues)", "",
+                  "| a -> b | issues | wins | losses | ties | diff | 95% interval | verdict |",
+                  "|---|---|---|---|---|---|---|---|"]
+            for x, y in pairs:
+                p = paired(records, x, y, subset=sub)
+                if p is None:
+                    L.append(f"| {x} -> {y} | 0 | no data | | | | | |")
+                    continue
+                sig = ("counts" if p["ci_low"] > 0 or p["ci_high"] < 0
+                       else "no measurable difference")
+                L.append(f"| {x} -> {y} | {p['n']} | {p['wins']} | {p['losses']} | "
+                         f"{p['ties']} | {p['diff']:+.3f} | "
+                         f"[{p['ci_low']:+.3f}, {p['ci_high']:+.3f}] | {sig} |")
     L += ["", "## Cost and latency", "",
           "| arm | $/triage | $/correct | p50 ms | p95 ms | run errors | api errors |",
           "|---|---|---|---|---|---|---|"]

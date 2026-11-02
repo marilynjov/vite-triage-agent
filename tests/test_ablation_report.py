@@ -153,3 +153,22 @@ def test_report_flag_calls_report_and_builds_no_jobs(monkeypatch, tmp_path):
                         lambda *a, **k: pytest.fail("built jobs"))
     ablation.main(["--report", str(tmp_path / "x.jsonl")])
     assert seen == [str(tmp_path / "x.jsonl")]
+
+
+def test_markdown_has_chain_rows_with_wins_and_losses():
+    # issues 0-3. grounded: 0,0,0,1  no-tools: 1,0,0,1  agent: 1,1,0,0  look: 1,1,0,0
+    vals = {"grounded": (0, 0, 0, 1), "agent-no-tools": (1, 0, 0, 1),
+            "agent": (1, 1, 0, 0), "agent-look": (1, 1, 0, 0)}
+    recs = [rec(a, i, r1=float(v)) for a, vs in vals.items() for i, v in enumerate(vs)]
+    md = R.markdown(recs)
+    chain = md.split("## Chain")[1].split("## ")[0]
+    assert "| grounded -> agent-no-tools | 4 | 1 | 0 | 3 |" in chain
+    assert "| agent-no-tools -> agent | 4 | 1 | 1 | 2 |" in chain
+    assert "| agent -> agent-look | 4 | 0 | 0 | 4 |" in chain
+    assert "no measurable difference" in chain
+
+
+def test_markdown_chain_says_no_data_for_missing_arm():
+    md = R.markdown(_arms({"agent": 1.0}))
+    chain = md.split("## Chain")[1].split("## ")[0]
+    assert "| grounded -> agent-no-tools | 0 | no data" in chain
