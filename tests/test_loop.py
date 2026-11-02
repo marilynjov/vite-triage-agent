@@ -5,6 +5,7 @@ from types import SimpleNamespace as NS
 
 import anthropic
 import pytest
+from pydantic import BaseModel
 
 from agent import loop, tools
 from api import schema as S
@@ -158,3 +159,32 @@ def test_tool_use_stop_without_tool_use_blocks_is_a_run_error():
     with pytest.raises(loop.RunError, match="no tool_use blocks") as ei:
         _run(_resp([NS(type="text", text="hm")]))
     assert len(ei.value.run.turns) == 1
+
+
+class Tiny(BaseModel):
+    answer: str
+
+
+def _tiny_final():
+    return _resp([NS(type="text", text=Tiny(answer="x").model_dump_json())], "end_turn")
+
+
+def test_output_model_is_sent_and_validated():
+    client, run = _run(_tiny_final(), output_model=Tiny)
+    assert client.calls[0]["output_config"]["format"]["schema"] == anthropic.transform_schema(Tiny)
+    assert isinstance(run.result, Tiny)
+
+
+def test_custom_check_rejection_is_a_run_error():
+    def check(result):
+        raise ValueError("nope")
+    with pytest.raises(loop.RunError, match="nope"):
+        _run(_tiny_final(), output_model=Tiny, check=check)
+
+
+def test_defaults_unchanged():
+    client, run = _run(_final([CSS]))
+    assert (client.calls[0]["output_config"]["format"]["schema"]
+            == anthropic.transform_schema(S.GroundedTriageResult))
+    with pytest.raises(loop.RunError):
+        _run(_final(["not/a/real/file.ts"]))
