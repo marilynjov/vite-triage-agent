@@ -40,6 +40,8 @@
 4. **A report over a file mixing staged and older-arm records,** where older records have no `outcome` key. Expected: the outcome table reads only staged records, and the other arms' tables are unchanged. Test in Task 6.
 5. **A stage that reads files outside the candidates** (locate's tools) and returns one that exists in scope. Expected: allowed. Only nonexistent or out-of-scope paths are rejected. Test in Task 2.
 
+> Amended 2026-11-02 (ruling 5, commit ec1d544): locate and understand prune out-of-scope items and fail only when none remain; see ARCHITECTURE.md §9.
+
 ---
 
 ### Task 1: The loop takes an output model and a check

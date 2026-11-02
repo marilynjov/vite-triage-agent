@@ -63,6 +63,12 @@ def test_locate_prunes_missing_or_out_of_scope_paths_and_records_them():
         assert [f.path for f in res.files] == [CSS] and dropped == [bad]
 
 
+def test_locate_keeps_and_normalizes_dot_slash_paths():
+    res, dropped = _loc("./" + CSS), []
+    stages.check_locate(dropped)(res)
+    assert [f.path for f in res.files] == [CSS] and dropped == []
+
+
 def test_locate_fails_only_when_nothing_is_in_scope():
     with pytest.raises(ValueError, match="^locate: no located file is in scope"):
         stages.check_locate()(_loc(MISSING, TESTFILE))
@@ -123,7 +129,7 @@ def test_hypothesis_rejects_fault_outside_understood_files():
 
 def test_hypothesis_rejects_out_of_scope_suspected_file():
     check = stages.check_hypothesis(_loc(CSS), _und(_region()))
-    with pytest.raises(ValueError, match="nope.ts"):
+    with pytest.raises(ValueError, match="^hypothesize: .*nope.ts"):
         check(_hyp(files=(CSS, "packages/vite/src/node/nope.ts")))
 
 

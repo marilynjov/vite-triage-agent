@@ -51,6 +51,8 @@ Phase 06 is split into pieces:
 | understand | issue + the located files (path, why) | read_file, grep | 6 | `UnderstandResult` | every region's file is one locate named; `1 <= start_line <= end_line <= file length` |
 | hypothesize | issue + `LocateResult` + `UnderstandResult` (JSON) | none | 1 | `HypothesisResult` | `suspected_files` pass `check_in_scope`; `fault.path` is a file of an understand region; fault lines inside the file |
 
+> Amended 2026-11-02 (ruling 5, commit ec1d544): locate and understand prune out-of-scope items and fail only when none remain; see ARCHITECTURE.md §9.
+
 **Prompts.**
 - *locate:* find the files the fix would touch and say what you saw. The
   shortlist is what the next stage reads, so favour recall over order.
@@ -142,6 +144,8 @@ a.end`.
   - each boundary check rejects, naming its stage: path not at the pin;
     understand region outside locate's files; line range out of bounds;
     `fault.path` outside understand's files
+
+> Amended 2026-11-02 (ruling 5, commit ec1d544): locate and understand prune out-of-scope items and fail only when none remain; see ARCHITECTURE.md §9.
 - **`tests/test_pipeline.py`** (FakeClient):
   - stage order
   - each stage receives the previous result

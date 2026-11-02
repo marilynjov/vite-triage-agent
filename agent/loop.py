@@ -40,7 +40,8 @@ from retrieval.search import FileHit
 from . import tools
 
 # The SDK's transform strips constraints the API rejects (maxItems, maxLength...).
-# Constrained decoding is not validation: Pydantic still enforces them on the final text.
+# Constrained decoding is not validation: Pydantic still enforces them on the final text
+# (except the stage list caps, which the stage checks enforce; see api/schema.py).
 OUTPUT_SCHEMA = anthropic.transform_schema(GroundedTriageResult)
 _SCHEMAS: dict[type[BaseModel], dict] = {GroundedTriageResult: OUTPUT_SCHEMA}
 

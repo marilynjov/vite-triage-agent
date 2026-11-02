@@ -460,13 +460,18 @@ framework does.
   both results as JSON, has no tools, and returns `HypothesisResult`, which is
   a `GroundedTriageResult` plus a `fault` (path, line range, mechanism). So
   `suspected_files` is scored exactly like every other arm.
-- **Each stage has a boundary check, in `agent/stages.py`.** locate: every path
-  is tracked at the pin and passes `is_gold_candidate`. understand: every
-  region's file is one locate named, and `1 <= start <= end <= file length`.
-  hypothesize: `suspected_files` pass `check_in_scope`, `fault.path` is a file
-  of an understand region, and the fault lines are inside the file. A check
-  raises `ValueError` prefixed with the stage name, which the loop turns into a
-  `RunError`, as in section 7.
+- **Each stage has a boundary check, in `agent/stages.py`.** locate and
+  understand prune; hypothesize rejects. locate drops paths that are absent at
+  the pin or fail `is_gold_candidate`, and fails only if none remain.
+  understand drops regions in files locate did not name, and fails if none
+  remain; a kept region must satisfy `1 <= start <= end <= file length`, or
+  the whole stage fails. Both cut lists over 5 files / 6 regions instead of
+  failing validation, mutate the result the loop keeps, and record what they
+  cut in `PipelineRun.dropped`. A leading `./` is stripped from paths before
+  comparing. hypothesize: `suspected_files` pass `check_in_scope`, `fault.path`
+  is a file of an understand region, and the fault lines are inside the file;
+  any miss rejects the stage. A failing check raises `ValueError` prefixed with
+  the stage name, which the loop turns into a `RunError`, as in section 7.
 - **The loop gained three parameters, not a second loop.** `output_model`
   (the schema sent and the type validated), `check` and `prompt` (a stage's
   prepared first message). `check=None` means the old scope check, applied only
@@ -533,7 +538,8 @@ gold at all, or the fault is in a gold file that is file-level only.
 `staged` is a sixth entry in `eval/arms.py` with `kind="pipeline"`;
 `make_record` dispatches it to `run_pipeline`. Its record is the usual one plus
 `stages` (each stage's output, or null), `stage_costs`, `failed_stage`,
-`outcome`, `fault_hit` and `file_level_only`, so the report stays a pure
+`dropped` (what the prune checks cut, by stage), `outcome`, `fault_hit` and
+`file_level_only`, so the report stays a pure
 function of the file. Gold regions load once per run, only if the staged arm is
 selected, and a staged job without them is refused rather than judged at file
 level by accident. Records share `data/runs/<split>-n<N>-r<R>.jsonl` with the
@@ -542,13 +548,17 @@ other arms, so staged is paired against `agent` on identical issues.
 - **Infrastructure is not an outcome.** If `run_pipeline` wrapped a non-run
   exception from inside a stage (a network or SDK error, say), the record gets
   `error_kind` `api`, no `failed_stage` and no outcome, and resume retries it.
-  Only a stage's own `RunError` (a rejected answer, a budget stop, a failed
-  boundary check) is a result.
+  Every api-class staged record (including an "API error" `RunError`
+  raised inside a stage) carries `outcome` and `fault_hit` of `None`. Only a
+  stage's own `RunError` (a rejected answer, a budget stop, a failed boundary
+  check or a check with nothing left) is a result.
 - **The report.** `eval/ablation_report.py` adds an outcome table (each
   outcome's share on `clean` and `all`, mean with min-max across repeats),
   the count of runs judged at file level only, the `fault_hit` rate among
   judged hits, and "Fails most": the non-hit outcome with the largest clean
-  share.
+  share. It also prints "Fails most by stage, miss + error (clean)": each
+  stage's mean clean share of its miss plus its errors. The "Fails most" gate
+  relies on this line.
 
 ---
 

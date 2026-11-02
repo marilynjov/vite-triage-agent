@@ -139,7 +139,7 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
     }
     if pipeline:
         gold_regions = (regions or {}).get(row["issue"]) or {}
-        if error_kind == "api" and (failed_stage is None or infra):  # nothing to attribute
+        if error_kind == "api":  # infrastructure, whatever stage raised it: no outcome
             out, fault_hit = None, None
         else:
             out, fault_hit = attribute(stages, failed_stage, list(row["gold_files"]),

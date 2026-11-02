@@ -1,7 +1,9 @@
 """Stage boundary checks for locate -> understand -> hypothesize.
 
 Each factory returns a check for agent.loop.run: it raises ValueError, prefixed
-with the stage name, when a stage's output breaks its contract.
+with the stage name, when a stage's output breaks its contract. The locate and
+understand checks prune out-of-scope items and mutate the result in place; they
+raise only when nothing valid is left or a line range is out of bounds.
 """
 from __future__ import annotations
 
@@ -35,6 +37,8 @@ def check_locate(dropped: list[str] | None = None) -> Callable[[LocateResult], N
         tracked = tools._tracked()
         keep = []
         for f in result.files:
+            f.path = f.path.removeprefix("./")
+            # same scope rule as tools.check_in_scope
             if f.path in tracked and M.is_gold_candidate(f.path):
                 keep.append(f)
             elif dropped is not None:
@@ -48,11 +52,12 @@ def check_locate(dropped: list[str] | None = None) -> Callable[[LocateResult], N
 
 def check_understand(located: LocateResult,
                      dropped: list[str] | None = None) -> Callable[[UnderstandResult], None]:
-    allowed = {f.path for f in located.files}
+    allowed = {f.path.removeprefix("./") for f in located.files}
 
     def check(result: UnderstandResult) -> None:
         keep = []
         for r in result.regions:
+            r.path = r.path.removeprefix("./")
             if r.path in allowed:
                 keep.append(r)
             elif dropped is not None:
@@ -71,7 +76,7 @@ def check_understand(located: LocateResult,
 
 def check_hypothesis(located: LocateResult,
                      understood: UnderstandResult) -> Callable[[HypothesisResult], None]:
-    allowed = {r.path for r in understood.regions}
+    allowed = {r.path.removeprefix("./") for r in understood.regions}
 
     def check(result: HypothesisResult) -> None:
         try:
@@ -79,6 +84,7 @@ def check_hypothesis(located: LocateResult,
         except ValueError as e:
             raise ValueError(f"hypothesize: {e}") from None
         f = result.fault
+        f.path = f.path.removeprefix("./")
         if f.path not in allowed:
             raise ValueError(f"hypothesize: fault file {f.path} is not in an understood region")
         if not _lines_ok(f.path, f.start_line, f.end_line):

@@ -205,7 +205,7 @@ STAGE_OF = {"locate_miss": "locate", "error:locate": "locate",
 
 
 def stage_failures(records, arm=STAGED, subset="clean"):
-    """Clean mean share of runs lost at each stage: its miss plus its errors."""
+    """Mean share for `subset` of runs lost at each stage: its miss plus its errors."""
     out = {}
     for o, (m, _, _) in outcome_table(records, arm, subset).items():
         if o in STAGE_OF:

@@ -353,7 +353,9 @@ def test_staged_early_error_keeps_locate_cost():
     def fn(*a, **k):
         raise PipelineError("API error: boom", PipelineRun(runs={"locate": _run([])}), "locate")
     r = _staged(fn)
-    assert r["outcome"] == "error:locate" and r["error_kind"] == "api" and r["cost_usd"] > 0
+    assert r["error_kind"] == "api" and r["outcome"] is None and r["fault_hit"] is None
+    assert r["failed_stage"] == "locate" and r["cost_usd"] > 0
+    assert ablation.done_keys([r]) == set()
 
 
 def test_staged_non_run_error_is_infrastructure():
