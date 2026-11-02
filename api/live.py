@@ -4,10 +4,11 @@ all waiters. Nothing here calls out while the lock is held except validation,
 which raises before any state is touched."""
 from __future__ import annotations
 
+import copy
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from api import config
@@ -89,7 +90,7 @@ class RunRegistry:
 
     def _after(self, run_id: str, seq: int) -> list[dict]:
         run = self._runs.get(run_id)
-        return [] if run is None else [e for e in run.events if e["seq"] > seq]
+        return [] if run is None else [copy.deepcopy(e) for e in run.events if e["seq"] > seq]
 
     def events_after(self, run_id: str, seq: int) -> list[dict]:
         with self._cond:
@@ -120,7 +121,9 @@ class RunRegistry:
     def get(self, run_id: str) -> LiveRun | None:
         with self._cond:
             self._evict()
-            return self._runs.get(run_id)
+            run = self._runs.get(run_id)
+            # A snapshot: the worker keeps mutating the stored run. task stays shared.
+            return None if run is None else replace(run, events=copy.deepcopy(run.events))
 
 
 registry = RunRegistry.from_config()

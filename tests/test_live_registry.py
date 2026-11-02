@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 from pydantic import ValidationError
@@ -80,9 +81,15 @@ def test_wait_after_on_finished_run_returns_immediately():
     reg, _ = make()
     rid = reg.start()
     reg.append(rid, dict(FAILED))
+    t0 = time.monotonic()
     assert reg.wait_after(rid, 1, 5.0) == []
+    assert time.monotonic() - t0 < 0.5
+    t0 = time.monotonic()
     assert len(reg.wait_after(rid, 0, 5.0)) == 1
+    assert time.monotonic() - t0 < 0.5
+    t0 = time.monotonic()
     assert reg.wait_after("nope", 0, 5.0) == []
+    assert time.monotonic() - t0 < 0.5
 
 
 def test_done_and_failed_set_status_and_finished_at():
@@ -142,3 +149,21 @@ def test_invalid_event_is_rejected():
         reg.append(rid, {"type": "nope"})
     assert reg.get(rid).events == []
     assert reg.append(rid, dict(STEP)) == 1
+
+
+def test_returned_data_is_a_copy():
+    reg, _ = make()
+    rid = reg.start()
+    reg.append(rid, dict(FAILED))
+    ev = reg.events_after(rid, 0)[0]
+    ev["seq"] = 99
+    ev["totals"]["turns"] = 99
+    ev2 = reg.wait_after(rid, 0, 0.05)[0]
+    ev2["message"] = "changed"
+    run = reg.get(rid)
+    run.events.clear()
+    run.status = "running"
+    stored = reg.events_after(rid, 0)[0]
+    assert stored["seq"] == 1 and stored["totals"]["turns"] == 1
+    assert stored["message"] == "boom"
+    assert reg.get(rid).status == "failed" and len(reg.get(rid).events) == 1
