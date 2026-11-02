@@ -21,7 +21,7 @@ the top k the system proposed?
 | 03 Retrieval | chunking, embeddings in pgvector, the recall@k harness | recall@10 64.1% → 68.5% from a path + imports header |
 | 03→04 Grounded triage | the model re-ranks retrieval's top 10 | recall@1 24.1% → 44.5% (206 rows) |
 | 04 Tools | four git tools at the pinned commit, a hand-written tool-use loop, `/triage/agent`, a trace in the UI | recall@1 41.5% vs grounded 30.4% (40 rows), but 26/40 runs used no tools |
-| 05 The agent loop | in progress: first, [does looking pay?](docs/superpowers/specs/2026-11-01-phase-05a-does-looking-pay-design.md) | recall@1 53.1% vs grounded 45.2% (206 rows, paired interval excludes 0), $0.0031 vs $0.0018 per triage |
+| 05 The agent loop | in progress: first, [does looking pay?](docs/superpowers/specs/2026-11-01-phase-05a-does-looking-pay-design.md) | clean recall@1 on 206 rows: 24.1% retrieval, 45.2% grounded, 53.1% agent (agent vs grounded paired interval excludes 0), $0.0031 vs $0.0018 per triage |
 
 Every number, with its caveats, is in [MEASUREMENTS.md](MEASUREMENTS.md). How
 the pieces fit and why each boundary is where it is: [ARCHITECTURE.md](ARCHITECTURE.md).

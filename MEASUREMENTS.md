@@ -526,8 +526,8 @@ verdict.
 difference counts only if its interval excludes zero; an interval touching
 exactly 0 does not count. The Scores table weights each repeat equally (mean of
 per-repeat means) while the Paired table weights each issue equally (repeats
-averaged per issue), so the two can differ slightly when an arm has errors, as
-`grounded` and `agent-look` each have one here.
+averaged per issue), so the two can differ when an issue has fewer repeats than
+others (api errors are excluded); here they coincide.
 
 **Flip rate.** The share of issues whose rank-1 hit differs across repeats:
 0.061 grounded, 0.091 agent-no-tools, 0.212 agent, 0.061 agent-look (clean).
@@ -572,11 +572,12 @@ arose.
 `grounded` to `agent-no-tools` changes only the system prompt and moves clean
 recall@1 by +0.005 with an interval that includes zero (2 wins, 1 loss, 30
 ties). Adding the tools on top moves it by +0.094 with an interval that
-excludes zero (7 wins, 0 losses, 26 ties). `agent-no-tools` made 0 tool calls, by construction. Interpretation, not
-tested: with no tools the model can only reorder the same ten candidates,
+excludes zero (7 wins, 0 losses, 26 ties). `agent-no-tools` made 0 tool calls, by construction. Caveat: `AGENT_SYSTEM`
+describes the four tools and allows naming files outside the candidates once a
+tool confirms them, so `agent-no-tools` measures that prompt with its tools
+absent. Interpretation, not tested: with no tools the model can only reorder the same ten candidates,
 which `grounded` already does; with tools it can grep and read a file before
-it picks.
-This corrects the Phase 04 reading, where the agent's lift over grounded could
+it picks. This corrects the Phase 04 reading, where the agent's lift over grounded could
 not be split between prompt and tools. `agent-no-tools` does lose recall@5
 (0.445 against 0.486), which the paired test above does not cover; that
 difference is not tested here.
@@ -625,7 +626,7 @@ At these prices the cost is not what decides it.
 - Three repeats per arm; the `agent` arm's spread across repeats (0.395-0.456)
   is itself 2 rows' worth.
 - File-level scoring, as everywhere in Phase 03. The confirmation on the
-  larger split is Task 6, not done here.
+  larger split is in the 206-row section below.
 
 ---
 
