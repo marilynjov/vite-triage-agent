@@ -626,3 +626,85 @@ At these prices the cost is not what decides it.
   is itself 2 rows' worth.
 - File-level scoring, as everywhere in Phase 03. The confirmation on the
   larger split is Task 6, not done here.
+
+---
+
+## Phase 05a — confirmation on all 206 val rows
+
+The 40-row stage's decision rule chose `agent`, so the confirmation ran three
+arms on every val row, one repeat each: `retrieval` (no model), `grounded`, and
+`agent`. 618 records, $1.0064 in total, 3 run errors (all in `agent`), 0 api
+errors. `PROVIDER=anthropic python -m eval.ablation --arms retrieval,grounded,agent --split val --n 206 --repeats 1 --max-dollars 3`.
+Everything below is the output of
+`python -m eval.ablation --report data/runs/val-n206-r1.jsonl`, except the
+`retrieval` row, which that report does not print (see the note under the
+table).
+
+**Scores** (one repeat, so no min-max spread; flip rate is n/a):
+
+| arm | subset | runs | recall@1 | recall@5 | MRR |
+|---|---|---|---|---|---|
+| grounded | clean (n=175) | 175 | 0.452 | 0.584 | 0.602 |
+| agent | clean (n=175) | 175 | 0.531 | 0.671 | 0.683 |
+| grounded | all | 206 | 0.481 | 0.614 | 0.637 |
+| agent | all | 206 | 0.553 | 0.695 | 0.708 |
+
+The report prints no `retrieval` row, so there are no `retrieval` numbers from
+this run to quote. The earlier "Grounded triage on the full val split" section
+above scored retrieval's candidate order on the same 206 rows: clean recall@1
+24.1%, recall@5 54.0%, MRR 43.8%; all rows recall@1 26.1%, MRR 46.4%. Those are
+that section's numbers, not this run's.
+
+**Paired comparison, `agent` against `grounded`** (recall@1, 95% bootstrap over
+issues, same method as the 40-row section):
+
+| subset | issues | wins | losses | ties | diff | 95% interval | verdict |
+|---|---|---|---|---|---|---|---|
+| clean | 175 | 22 | 8 | 145 | +0.080 | [+0.026, +0.134] | counts |
+| all | 206 | 25 | 10 | 171 | +0.072 | [+0.023, +0.124] | counts |
+
+The report prints no paired comparison against `retrieval`, so none is given.
+
+**Cost.**
+
+| arm | $/triage | $/correct | p50 ms | p95 ms | run errors | api errors |
+|---|---|---|---|---|---|---|
+| grounded | 0.0018 | 0.0031 | 6224 | 8636 | 0 | 0 |
+| agent | 0.0031 | 0.0048 | 7270 | 12162 | 3 | 0 |
+
+`retrieval` is free. `agent` costs more per triage ($0.0031 against $0.0018)
+and per correct answer ($0.0048 against $0.0031).
+
+**Tool use (`agent`).** 38% of runs used a tool (0.38). Turns per run:
+mean 1.7, median 1, max 7. Calls by tool: grep 107, read_file 53, list_dir 6,
+git_log 1. Tool error rate 0.01. The share of final picks that appeared in tool
+output ("picks seen") is 0.24.
+
+**Gate verdict.** Agency paid for itself: on the 206 val rows `agent` raised
+clean recall@1 from 0.452 to 0.531 (+0.080, interval [+0.026, +0.134]) over
+`grounded`, for $0.0031 per triage against $0.0018 and $0.0048 per correct
+answer against $0.0031.
+
+The sign, size and verdict match the 40-row stage (+0.099 on its clean rows),
+and the all-rows subset agrees (+0.072, interval excludes zero). The interval is
+wide: its lower end is +0.026. Reading the 22 wins and 8
+losses: the gain is a net of 14 issues, and 145 of 175 issues did not change.
+
+**Caveats.**
+- One repeat per row here. The 40-row stage measured run-to-run variation: the
+  `agent` flip rate there was 0.212 (clean), so a single repeat on any one
+  issue is noisy; the bootstrap over 175 issues accounts for sampling of issues
+  but not for the model's run-to-run variation on the same issue.
+- Arm `grounded` runs through the agent loop with the in-scope check, so it is
+  not byte-identical to Phase 04's 206-row `/triage/grounded` result. It scores
+  clean recall@1 0.452 here against 44.5% there, a 0.7 point difference; this
+  run cannot say whether that is the loop or run-to-run variation.
+- The tools read the code as of the pin, after every val fix. A file the agent
+  finds by grep may exist only because the fix for the issue landed, so the
+  gain is possibly optimistic, by an amount this run cannot measure.
+- Rows whose issue text names the gold file are excluded from clean (n=175 of
+  206). Clean is the subset quoted; the all-rows numbers are given for
+  completeness.
+- File-level scoring, as everywhere in Phase 03.
+- Three `agent` runs ended in a run error; the report still prints 206 runs
+  for `agent`, and this write-up does not say how those three were scored.
