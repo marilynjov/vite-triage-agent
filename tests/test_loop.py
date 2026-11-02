@@ -176,15 +176,32 @@ def test_output_model_is_sent_and_validated():
 
 
 def test_custom_check_rejection_is_a_run_error():
+    seen, events = [], []
+
     def check(result):
+        seen.append(result)
         raise ValueError("nope")
     with pytest.raises(loop.RunError, match="nope"):
-        _run(_tiny_final(), output_model=Tiny, check=check)
+        _run(_tiny_final(), output_model=Tiny, check=check, on_event=events.append)
+    assert len(seen) == 1 and isinstance(seen[0], Tiny) and seen[0].answer == "x"
+    assert events[-1]["type"] == "failed"
 
 
 def test_defaults_unchanged():
     client, run = _run(_final([CSS]))
     assert (client.calls[0]["output_config"]["format"]["schema"]
             == anthropic.transform_schema(S.GroundedTriageResult))
-    with pytest.raises(loop.RunError):
+    with pytest.raises(loop.RunError, match="suspected_files not in scope"):
         _run(_final(["not/a/real/file.ts"]))
+
+
+def test_schema_is_computed_once_per_model(monkeypatch):
+    calls = []
+    real = anthropic.transform_schema
+    monkeypatch.setattr(loop.anthropic, "transform_schema",
+                        lambda m: (calls.append(m), real(m))[1])
+    loop._SCHEMAS.pop(Tiny, None)
+    _run(_tiny_final(), output_model=Tiny)
+    _run(_tiny_final(), output_model=Tiny)
+    assert calls == [Tiny]
+    assert loop._schema_for(Tiny) is loop._schema_for(Tiny)
