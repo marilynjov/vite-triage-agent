@@ -29,6 +29,7 @@ from .ablation import load_records
 from .arms import MODEL_ARMS
 
 METRICS = ("recall_at_1", "recall_at_5", "rr")
+RETRIEVAL = "retrieval"
 BASELINE = MODEL_ARMS[0]
 AGENT_ARMS = tuple(a for a in MODEL_ARMS if a != BASELINE)
 CHAIN = tuple(zip(MODEL_ARMS, MODEL_ARMS[1:]))
@@ -167,11 +168,12 @@ def _f(x, spec=".3f"):
 
 def markdown(records) -> str:
     arms = [BASELINE, *AGENT_ARMS]
+    scored = [RETRIEVAL, *arms]
     L = []
     L += ["## Scores (mean over repeats; min-max across repeats)", "",
           "| arm | subset | runs | recall@1 | recall@5 | MRR | flip rate |",
           "|---|---|---|---|---|---|---|"]
-    for arm in arms:
+    for arm in scored:
         for sub in ("all", "clean"):
             s = arm_scores(records, arm, sub)
             if not s:
@@ -183,7 +185,9 @@ def markdown(records) -> str:
                      + f" | {_f(flip_rate(records, arm, sub))} |")
     for title, pairs in (("Chain: each arm against the one before it", CHAIN),
                          ("Each agent arm against grounded",
-                          [(BASELINE, x) for x in AGENT_ARMS])):
+                          [(BASELINE, x) for x in AGENT_ARMS]),
+                         ("Each model arm against retrieval",
+                          [(RETRIEVAL, x) for x in arms])):
         for sub in ("clean", "all"):
             L += ["", f"## {title} ({sub}, recall@1, b vs a, 95% bootstrap over issues)", "",
                   "| a -> b | issues | wins | losses | ties | diff | 95% interval | verdict |",
@@ -201,7 +205,7 @@ def markdown(records) -> str:
     L += ["", "## Cost and latency", "",
           "| arm | $/triage | $/correct | p50 ms | p95 ms | run errors | api errors |",
           "|---|---|---|---|---|---|---|"]
-    for arm in arms:
+    for arm in scored:
         if not any(r["arm"] == arm for r in records):
             L.append(f"| {arm} | no data | | | | | |")
             continue

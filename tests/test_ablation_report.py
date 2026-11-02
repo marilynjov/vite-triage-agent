@@ -172,3 +172,27 @@ def test_markdown_chain_says_no_data_for_missing_arm():
     md = R.markdown(_arms({"agent": 1.0}))
     chain = md.split("## Chain")[1].split("## ")[0]
     assert "| grounded -> agent-no-tools | 0 | no data" in chain
+
+
+def _with_retrieval():
+    vals = {"retrieval": (0, 0, 0, 1), "grounded": (0, 1, 0, 1), "agent": (1, 1, 0, 0)}
+    return [rec(a, i, r1=float(v)) for a, vs in vals.items() for i, v in enumerate(vs)]
+
+
+def test_markdown_scores_include_retrieval():
+    md = R.markdown(_with_retrieval())
+    scores = md.split("## Scores")[1].split("## ")[0]
+    assert "| retrieval | clean | 4 | 0.250 (0.250-0.250)" in scores
+
+
+def test_markdown_vs_retrieval_wins_and_losses():
+    md = R.markdown(_with_retrieval())
+    sec = md.split("## Each model arm against retrieval (clean")[1].split("## ")[0]
+    assert "| retrieval -> grounded | 4 | 1 | 0 | 3 |" in sec
+    assert "| retrieval -> agent | 4 | 2 | 1 | 1 |" in sec
+
+
+def test_markdown_vs_retrieval_says_no_data_without_retrieval_records():
+    md = R.markdown(_arms({"agent": 1.0}))
+    sec = md.split("## Each model arm against retrieval (clean")[1].split("## ")[0]
+    assert "| retrieval -> agent | 0 | no data" in sec
