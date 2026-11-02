@@ -709,3 +709,125 @@ losses: the gain is a net of 14 issues, and 145 of 175 issues did not change.
 - File-level scoring, as everywhere in Phase 03.
 - Three `agent` runs ended in a run error, all on clean rows. They score
   recall@1 = 0, so the `agent` figure is conservative.
+
+## Phase 06a — staged analysis (40 rows × 2 repeats, 2026-11-02)
+
+Triage split into three model calls through the same loop, under one budget:
+**locate** (tools: grep, list_dir, read_file, git_log; 8 turns) names up to 5
+files, **understand** (read_file, grep; 6 turns) names up to 6 line regions in
+those files, **hypothesize** (no tools; 1 turn) names the fault and ranks the
+files. Each run is attributed to the stage where it was lost, against gold
+regions: the fix's own lines still present at the pin, from `git blame`.
+Same 40 val rows as Phase 05a, arm `staged`, in `data/runs/val-n40-r3.jsonl`
+next to the `agent` arm's 120 records.
+
+Command: `PROVIDER=anthropic python -m eval.ablation --arms staged --n 40 --repeats 2 --name val-n40-r3`
+then `python -m eval.ablation --report data/runs/val-n40-r3.jsonl`.
+
+**A first attempt was discarded.** Its first 57 runs (out of a planned 120)
+had 23 run errors; 14 of them came from locate's boundary check, which rejected the
+whole answer when any one named file was out of scope (a test file, a `.d.ts`).
+Four more were understand's contract (2 regions in files locate had not named,
+2 answers over the 6-region cap), so 18 of the 23 were our checks; the other 5
+were budget or turn stops.
+That measured our contract, not localization, so the run was stopped. The
+checks now drop out-of-scope files and regions in files locate did not name,
+record what they dropped, and fail only when nothing is left. The 57 records
+are kept in `data/runs/val-n40-r3-staged-v1.jsonl` (spend counted below) and
+are not part of any number here.
+
+**Scores (recall@1, mean over repeats; min–max across repeats).**
+
+| arm | subset | runs | recall@1 | recall@5 | MRR |
+|---|---|---|---|---|---|
+| agent | clean | 99 | 0.434 (0.395-0.456) | 0.575 (0.567-0.587) | 0.598 (0.563-0.616) |
+| staged | clean | 66 | 0.419 (0.404-0.434) | 0.621 (0.576-0.667) | 0.568 (0.545-0.591) |
+| agent | all | 120 | 0.478 (0.454-0.500) | 0.615 (0.599-0.628) | 0.642 (0.627-0.658) |
+| staged | all | 80 | 0.411 (0.386-0.436) | 0.647 (0.609-0.684) | 0.582 (0.576-0.588) |
+
+**Staged against agent (recall@1, paired over issues, 95% bootstrap).**
+
+| subset | issues | wins | losses | ties | diff | 95% interval | verdict |
+|---|---|---|---|---|---|---|---|
+| clean | 33 | 7 | 8 | 18 | -0.014 | [-0.106, +0.080] | no measurable difference |
+| all | 40 | 7 | 12 | 21 | -0.066 | [-0.163, +0.028] | no measurable difference |
+
+Against `grounded`, clean: +0.085, interval [-0.045, +0.227], no measurable
+difference (`agent` against `grounded` on the same rows: +0.099, [+0.027, +0.187]).
+
+**Cost and latency.**
+
+| arm | $/triage | $/correct | p50 ms | p95 ms | run errors |
+|---|---|---|---|---|---|
+| agent | 0.0028 | 0.0048 | 6944 | 12335 | 0 |
+| staged | 0.0113 | 0.0239 | 33606 | 45148 | 11 |
+
+`staged` costs about 4 times `agent` per triage and about 5 times per correct
+answer, and takes about 5 times as long at the median. Mean cost per run that
+reached the stage: locate $0.0060, understand $0.0043, hypothesize $0.0013. Tool calls: read_file 522,
+grep 334, list_dir 10, git_log 6; mean 8.2 turns per run.
+
+**Where runs are lost (share of runs; mean over 2 repeats, min–max).**
+
+| outcome | clean (66 runs) | all (80 runs) |
+|---|---|---|
+| hit | 0.439 (0.424-0.455) | 0.438 (0.425-0.450) |
+| locate_miss | 0.167 (0.152-0.182) | 0.138 (0.125-0.150) |
+| understand_miss | 0.121 (0.091-0.152) | 0.113 (0.100-0.125) |
+| error:understand | 0.136 (0.091-0.182) | 0.125 (0.075-0.175) |
+| hypothesize_miss | 0.136 (0.121-0.152) | 0.175 (0.125-0.225) |
+| error:locate | — | 0.013 (0.000-0.025) |
+
+By stage, miss plus error (clean): **understand 0.258**, locate 0.167,
+hypothesize 0.136. The single largest outcome is `locate_miss`; the largest
+stage is understand, because half of what it loses is errors.
+
+The 11 run errors across all 80 runs: understand ran out of its 6 turns 5
+times and out of the pipeline's 150k-token budget 5 times without giving an
+answer. In those 5 token stops locate had already used 85k–130k of the 150k
+(understand started with 19.9k–65.4k left), so half of understand's budget
+stops are locate's spend;
+locate ran out of its 8 turns once. The pruning checks dropped files from
+locate's answer in 15 runs and regions from understand's in 5 (2 of those 5
+were cuts over the 6-region cap).
+
+20 clean runs (10 issues) were judged at file level only, because none of their
+fix lines survive at the pin. Among hits whose fault could be judged, the fault
+overlapped a gold region in 0.550 of them (clean).
+
+**Gate.** *Understand fails most: 25.8% of clean runs are lost there (12.1% where
+locate had named a gold file but understand named no gold region, 13.6% that
+ended with no answer), against 16.7% at locate and 13.6% at hypothesize. In
+each repeat on its own, understand (0.273, 0.242) is above locate (0.182,
+0.152).* That much is measured.
+
+What to fix first is a reading of the 10 understand errors, not a measured
+result: give each stage its own share of the token budget (or cap locate's), so
+locate cannot spend what understand needs, and give understand more than 6
+turns. Five of the ten were turn stops and five were token stops after locate's
+spend; neither change alone addresses both. The test is whether
+`error:understand` falls without `understand_miss` rising. Also unmeasured:
+understand reads with read_file in chunks of up to 400 lines over files that
+can run to thousands of lines, which is where its turns and tokens go.
+
+**Verdict on the structure.** On these 40 rows the staged pipeline is no better
+than the single agent at recall@1 (clean -0.014, interval [-0.106, +0.080]) and
+costs about four times as much. Its value here is the attribution, not the score.
+
+**Caveats.**
+- Two repeats for `staged` against three for `agent`. The pairing is over
+  issues (each issue's mean over its repeats), so both enter, but the staged
+  side is noisier. Its flip rate was 0.212 (clean).
+- 33 clean issues. Outcome shares move by about 3 points per run, and the
+  min–max across repeats overlaps between locate and understand on their own
+  error and miss rows, so the stage ordering is a reading of this sample, not a
+  separation.
+- The code at the pin already contains every val fix, so a stage can find the
+  fix itself. This is the same optimism as Phase 05a, by an amount this run
+  cannot measure.
+- Gold regions cover only fix lines still present at the pin; 146 of 206 val
+  rows have any. Rows without them are judged at file level.
+- Spend: the smoke test $0.0178, the discarded attempt $0.6064, this run
+  $0.906, $1.53 in all against a $1.50 plan. The overrun of about $0.03 is
+  jobs already in flight when the cap was reached, plus the smoke test, which
+  ran in its own file.

@@ -16,7 +16,7 @@ def _run(*responses, **kw):
 
 
 def test_arms_table_has_the_five_arms_with_the_right_prompt_and_tools():
-    assert set(ARMS) == {"grounded", "agent-no-tools", "agent", "agent-look", "retrieval"}
+    assert set(ARMS) == {"grounded", "agent-no-tools", "agent", "agent-look", "retrieval", "staged"}
     assert ARMS["grounded"].system == GROUNDED_SYSTEM and ARMS["grounded"].tool_specs == []
     assert ARMS["agent-no-tools"].system == AGENT_SYSTEM and ARMS["agent-no-tools"].tool_specs == []
     assert ARMS["agent"].system == AGENT_SYSTEM and ARMS["agent"].tool_specs == TOOL_SPECS
@@ -51,3 +51,10 @@ def test_defaults_are_unchanged():
     client, _ = _run(_final([CSS]))
     assert client.calls[0]["system"] == AGENT_SYSTEM
     assert client.calls[0]["tools"] == TOOL_SPECS
+
+
+def test_staged_arm_is_a_pipeline_arm_and_not_in_model_arms():
+    from eval.arms import PIPELINE_ARMS
+    assert ARMS["staged"].kind == "pipeline" and ARMS["staged"].system is None
+    assert "staged" not in MODEL_ARMS and PIPELINE_ARMS == ("staged",)
+    assert all(ARMS[a].kind == "loop" for a in MODEL_ARMS)

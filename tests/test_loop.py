@@ -5,6 +5,7 @@ from types import SimpleNamespace as NS
 
 import anthropic
 import pytest
+from pydantic import BaseModel
 
 from agent import loop, tools
 from api import schema as S
@@ -158,3 +159,59 @@ def test_tool_use_stop_without_tool_use_blocks_is_a_run_error():
     with pytest.raises(loop.RunError, match="no tool_use blocks") as ei:
         _run(_resp([NS(type="text", text="hm")]))
     assert len(ei.value.run.turns) == 1
+
+
+class Tiny(BaseModel):
+    answer: str
+
+
+def _tiny_final():
+    return _resp([NS(type="text", text=Tiny(answer="x").model_dump_json())], "end_turn")
+
+
+def test_output_model_is_sent_and_validated():
+    client, run = _run(_tiny_final(), output_model=Tiny)
+    assert client.calls[0]["output_config"]["format"]["schema"] == anthropic.transform_schema(Tiny)
+    assert isinstance(run.result, Tiny)
+
+
+def test_custom_check_rejection_is_a_run_error():
+    seen, events = [], []
+
+    def check(result):
+        seen.append(result)
+        raise ValueError("nope")
+    with pytest.raises(loop.RunError, match="nope"):
+        _run(_tiny_final(), output_model=Tiny, check=check, on_event=events.append)
+    assert len(seen) == 1 and isinstance(seen[0], Tiny) and seen[0].answer == "x"
+    assert events[-1]["type"] == "failed"
+
+
+def test_defaults_unchanged():
+    client, run = _run(_final([CSS]))
+    assert (client.calls[0]["output_config"]["format"]["schema"]
+            == anthropic.transform_schema(S.GroundedTriageResult))
+    with pytest.raises(loop.RunError, match="suspected_files not in scope"):
+        _run(_final(["not/a/real/file.ts"]))
+
+
+def test_schema_is_computed_once_per_model(monkeypatch):
+    calls = []
+    real = anthropic.transform_schema
+    monkeypatch.setattr(loop.anthropic, "transform_schema",
+                        lambda m: (calls.append(m), real(m))[1])
+    loop._SCHEMAS.pop(Tiny, None)
+    _run(_tiny_final(), output_model=Tiny)
+    _run(_tiny_final(), output_model=Tiny)
+    assert calls == [Tiny]
+    assert loop._schema_for(Tiny) is loop._schema_for(Tiny)
+
+
+def test_prompt_replaces_the_grounded_first_message():
+    client, run = _run(_final([CSS]), prompt="my own prompt")
+    assert client.calls[0]["messages"][0]["content"] == "my own prompt"
+
+
+def test_empty_tool_specs_omit_the_tools_key():
+    client, _ = _run(_final([CSS]), tool_specs=[])
+    assert "tools" not in client.calls[0]

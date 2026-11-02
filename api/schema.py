@@ -84,6 +84,66 @@ class GroundedTriageResult(TriageResult):
     suspected_files: list[str] = Field(max_length=5)
 
 
+class LocatedFile(BaseModel):
+    """A file the locate stage names, with why and what it saw there."""
+
+    model_config = {"extra": "forbid"}
+
+    path: str
+    why: str
+    evidence: str
+
+
+# These caps are not validated: a result over the cap is truncated by the stage check, which
+# records what it cut. They stay in the JSON schema (maxItems, which the SDK turns into a
+# description) so the model is still told.
+LOCATE_MAX_FILES = 5
+UNDERSTAND_MAX_REGIONS = 6
+
+
+class LocateResult(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    reasoning: str
+    files: list[LocatedFile] = Field(min_length=1, json_schema_extra={"maxItems": LOCATE_MAX_FILES})
+
+
+class Region(BaseModel):
+    """A span of a located file that implements the reported behaviour."""
+
+    model_config = {"extra": "forbid"}
+
+    path: str
+    symbol: str | None
+    start_line: int
+    end_line: int
+    what_it_does: str
+    relevance: str
+
+
+class UnderstandResult(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    reasoning: str
+    regions: list[Region] = Field(min_length=1,
+                                  json_schema_extra={"maxItems": UNDERSTAND_MAX_REGIONS})
+
+
+class Fault(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    path: str
+    start_line: int
+    end_line: int
+    mechanism: str
+
+
+class HypothesisResult(GroundedTriageResult):
+    """The hypothesize stage's result: the triage fields plus where the fault is."""
+
+    fault: Fault
+
+
 class ToolCall(BaseModel):
     """One tool call the agent made: what it asked, what came back, how long it took."""
 

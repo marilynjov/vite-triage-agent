@@ -28,7 +28,7 @@ import os
 from typing import Any, Callable
 
 import anthropic
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from api import config as C
 from api import cost
@@ -40,8 +40,17 @@ from retrieval.search import FileHit
 from . import tools
 
 # The SDK's transform strips constraints the API rejects (maxItems, maxLength...).
-# Constrained decoding is not validation: Pydantic still enforces them on the final text.
+# Constrained decoding is not validation: Pydantic still enforces them on the final text
+# (except the stage list caps, which the stage checks enforce; see api/schema.py).
 OUTPUT_SCHEMA = anthropic.transform_schema(GroundedTriageResult)
+_SCHEMAS: dict[type[BaseModel], dict] = {GroundedTriageResult: OUTPUT_SCHEMA}
+
+
+def _schema_for(model: type[BaseModel]) -> dict:
+    """transform_schema once per output model."""
+    if model not in _SCHEMAS:
+        _SCHEMAS[model] = anthropic.transform_schema(model)
+    return _SCHEMAS[model]
 
 AGENT_SYSTEM = GROUNDED_SYSTEM + """
 **Tools**
@@ -79,7 +88,7 @@ class Turn:
 
 @dataclass
 class Run:
-    result: GroundedTriageResult | None = None
+    result: BaseModel | None = None
     messages: list = field(default_factory=list)
     turns: list[Turn] = field(default_factory=list)
     trace: list[ToolCall] = field(default_factory=list)
@@ -189,18 +198,28 @@ def run(
     budget: Budget | None = None,
     on_event: Callable[[dict], None] | None = None,
     client: Any = None,
+    output_model: type[BaseModel] = GroundedTriageResult,
+    check: Callable[[BaseModel], None] | None = None,
+    prompt: str | None = None,
 ) -> Run:
     if client is None:
         # built here, not at import, so tests never need a key
         client = anthropic.Anthropic()
     budget = budget or Budget.from_config()
+    if check is None:
+        # the scope check reads suspected_files, so it only fits triage-shaped models
+        check = (tools.check_in_scope if issubclass(output_model, GroundedTriageResult)
+                 else (lambda _result: None))
+    schema = _schema_for(output_model)
     max_turns = max_turns or budget.max_turns
     t0 = _now()
     # None means the full tool set; [] means none, and the request then omits the key
     tool_specs = tools.TOOL_SPECS if tool_specs is None else tool_specs
 
     out = Run()
-    out.messages.append({"role": "user", "content": grounded_prompt(title, body, candidates)})
+    # a stage passes its own prepared first message; everyone else gets the grounded prompt
+    out.messages.append({"role": "user", "content":
+                         prompt if prompt is not None else grounded_prompt(title, body, candidates)})
 
     def fail(exc: RunError, reason: str) -> RunError:
         event = {"type": "failed", "reason": reason, "message": str(exc),
@@ -235,7 +254,7 @@ def run(
                 max_tokens=C.MAX_TOKENS,
                 system=system,
                 output_config={"format": {"type": "json_schema",
-                                          "schema": OUTPUT_SCHEMA}},
+                                          "schema": schema}},
                 messages=out.messages,
             )
             if tool_specs:
@@ -286,8 +305,8 @@ def run(
             out.messages.append({"role": "assistant", "content": response.content})
             text = next((b.text for b in response.content if b.type == "text"), "")
             try:
-                result = GroundedTriageResult.model_validate_json(text)
-                tools.check_in_scope(result)
+                result = output_model.model_validate_json(text)
+                check(result)
             except (ValidationError, ValueError) as exc:
                 raise fail(RunError(f"final answer rejected: {exc}", out), "run") from exc
             out.result = result

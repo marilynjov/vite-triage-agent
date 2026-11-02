@@ -51,8 +51,8 @@ its steps to the browser as they happen (section 8).
 |---|---|---|
 | `mining/` | issue → fix labels, the pinned SHA, the temporal split | git, GitHub REST |
 | `retrieval/` | chunking, embedding, the `chunks` table, search | Ollama (embeddings), Postgres |
-| `eval/` | scoring: `retrieve` (recall@k, MRR), `grounded` (model re-rank vs retrieval), `agent` (retrieval vs grounded vs agent), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `agent/`, `api/` |
-| `agent/` | the four git tools, the tool-use loop and its budgets, the SDK-runner comparison, `explain` (prints a run's message array) | `api/` (prompt, cost, schema), `retrieval/`, git |
+| `eval/` | scoring: `retrieve` (recall@k, MRR), `grounded` (model re-rank vs retrieval), `agent` (retrieval vs grounded vs agent), `ablation` (the arms, including `staged`), `gold_regions` and `attribution` (which stage missed), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `agent/`, `api/` |
+| `agent/` | the four git tools, the tool-use loop and its budgets, the staged pipeline (`pipeline`, `stages`), the SDK-runner comparison, `explain` (prints a run's message array) | `api/` (prompt, cost, schema), `retrieval/`, git |
 | `api/` | FastAPI routes, prompts, the provider seam, cost, the `calls` table, the in-memory live-run registry (`live.py`) | `retrieval/`, `agent/`, providers, Postgres |
 | `web/` | one React page over the API, including the live trace reducer (`liveRun.ts`) | `api/` over HTTP |
 | `scripts/` | `gen_types.py`: Pydantic → TypeScript | `api/schema.py` |
@@ -439,6 +439,127 @@ callback and budgets.
 - **No auth.** Anyone who can reach the API can start a run, within the
   concurrency limit. CORS is the only gate, and it isn't one for non-browsers.
 
+## 9. Staged analysis: locate, understand, hypothesize
+
+```
+issue + top 10 ─► locate ─► LocateResult ─► understand ─► UnderstandResult ─► hypothesize ─► HypothesisResult
+                  (4 tools, 8 turns)        (read_file, grep, 6 turns)        (no tools, 1 turn)
+                  check_locate              check_understand                  check_hypothesis
+```
+
+Phase 06's question is which stage fails most, and one agent loop can't
+answer it: a miss has no address. `agent/pipeline.py::run_pipeline` runs the
+same `agent.loop.run` three times, each with its own system prompt, tools,
+first message and typed output. Nothing new owns the conversation, and no
+framework does.
+
+- **Three contracts.** locate returns `LocateResult` (one to five
+  `LocatedFile`s: path, why, evidence). understand gets the issue and the
+  located paths and returns `UnderstandResult` (one to six `Region`s: path,
+  symbol, line range, what it does, relevance). hypothesize gets the issue and
+  both results as JSON, has no tools, and returns `HypothesisResult`, which is
+  a `GroundedTriageResult` plus a `fault` (path, line range, mechanism). So
+  `suspected_files` is scored exactly like every other arm.
+- **Each stage has a boundary check, in `agent/stages.py`.** locate and
+  understand prune; hypothesize rejects. locate drops paths that are absent at
+  the pin or fail `is_gold_candidate`, and fails only if none remain.
+  understand drops regions in files locate did not name, and fails if none
+  remain; a kept region must satisfy `1 <= start <= end <= file length`, or
+  the whole stage fails. Both cut lists over 5 files / 6 regions instead of
+  failing validation, mutate the result the loop keeps, and record what they
+  cut in `PipelineRun.dropped`. A leading `./` is stripped from paths before
+  comparing. hypothesize: `suspected_files` pass `check_in_scope`, `fault.path`
+  is a file of an understand region, and the fault lines are inside the file;
+  any miss rejects the stage. A failing check raises `ValueError` prefixed with
+  the stage name, which the loop turns into a `RunError`, as in section 7.
+- **The loop gained three parameters, not a second loop.** `output_model`
+  (the schema sent and the type validated), `check` and `prompt` (a stage's
+  prepared first message). `check=None` means the old scope check, applied only
+  when `output_model` is a `GroundedTriageResult` subclass, because that check
+  reads `suspected_files`. Every stage passes its own check explicitly.
+- **One budget, shared.** The pipeline takes one `Budget`. Each stage gets
+  its own turn cap (8, 6, 1) and what is left of the tokens, seconds and
+  dollars after the stages before it. A stage that would start with any of
+  those at or below zero fails at once as a budget stop, without a call. The
+  overshoot is the same as section 8: up to one call past a limit, noticed
+  afterwards.
+- **A failure keeps its address and its spend.** `PipelineError` subclasses
+  `RunError`. Its message is the failing stage's own, unchanged, so the eval's
+  "API error" test on the message still works. The stage, the partial
+  `PipelineRun` and the budget `limit` and `value` travel as attributes. The
+  failed stage's turns are added to the run, so the cost of a failure is
+  counted.
+- **Eval-only, not on `/runs`.** The staged pipeline is reached through
+  `eval/ablation.py` alone. `/runs` and `/triage/agent` still run the single
+  agent, and `LiveEvent` has no stage events yet. Piece C attaches there.
+
+### Gold regions: where in the file the fix was
+
+File-level gold says which file; stage attribution needs where in it.
+`eval/gold_regions.py` gets this for free, without a model call:
+
+1. A row's fix commits are those in `raw/commits.jsonl` whose `pr_refs`
+   intersect the row's `linked_prs`, or whose `closes_refs` contain the issue.
+2. For each gold file, `git blame --line-porcelain <pin> -- <file>`. The lines
+   blamed to a fix commit are the fix's own lines that still exist at the pin,
+   already in pin line numbers. Contiguous lines form one inclusive range.
+
+- **Per gold file.** A gold file whose fix lines did not survive (deleted,
+  rewritten later) maps to `[]` and is judged at file level, even when another
+  gold file of the same row has regions.
+- **Blame errors raise.** Only a path absent at the pin gives `[]`. A bad
+  clone path, a pin missing from the clone or a failed blame raises, so an
+  infrastructure fault is never cached as "no regions".
+- **The cache is keyed by pin.** `data/gold_regions.jsonl` (gitignored) holds
+  `{issue, pin, regions}`; rows for another pin are ignored and recomputed.
+- **Coverage.** 146 of the 206 val rows have line-level gold. The report
+  counts the rest.
+
+### Attribution: one outcome per run
+
+`eval/attribution.py::outcome` checks in this order and returns the first that
+applies, so each run has exactly one:
+
+| Outcome | Condition |
+|---|---|
+| `error:<stage>` | a stage raised: `RunError`, budget or boundary check |
+| `locate_miss` | no gold file in `LocateResult.files` |
+| `understand_miss` | no region in a gold file overlaps that file's gold ranges (a gold file with no ranges: any region in it) |
+| `hypothesize_miss` | understand reached gold, but `suspected_files[0]` is not gold |
+| `hit` | `suspected_files[0]` is gold |
+
+Ranges are inclusive and overlap when `a.start <= b.end and b.start <= a.end`.
+On a `hit`, `fault_hit` records whether `fault` overlaps a gold range of its
+file. It is `None`, not `False`, when it can't be judged: the row has no line
+gold at all, or the fault is in a gold file that is file-level only.
+
+### The staged arm
+
+`staged` is a sixth entry in `eval/arms.py` with `kind="pipeline"`;
+`make_record` dispatches it to `run_pipeline`. Its record is the usual one plus
+`stages` (each stage's output, or null), `stage_costs`, `failed_stage`,
+`dropped` (what the prune checks cut, by stage), `outcome`, `fault_hit` and
+`file_level_only`, so the report stays a pure
+function of the file. Gold regions load once per run, only if the staged arm is
+selected, and a staged job without them is refused rather than judged at file
+level by accident. Records share `data/runs/<split>-n<N>-r<R>.jsonl` with the
+other arms, so staged is paired against `agent` on identical issues.
+
+- **Infrastructure is not an outcome.** If `run_pipeline` wrapped a non-run
+  exception from inside a stage (a network or SDK error, say), the record gets
+  `error_kind` `api`, no `failed_stage` and no outcome, and resume retries it.
+  Every api-class staged record (including an "API error" `RunError`
+  raised inside a stage) carries `outcome` and `fault_hit` of `None`. Only a
+  stage's own `RunError` (a rejected answer, a budget stop, a failed boundary
+  check or a check with nothing left) is a result.
+- **The report.** `eval/ablation_report.py` adds an outcome table (each
+  outcome's share on `clean` and `all`, mean with min-max across repeats),
+  the count of runs judged at file level only, the `fault_hit` rate among
+  judged hits, and "Fails most": the non-hit outcome with the largest clean
+  share. It also prints "Fails most by stage, miss + error (clean)": each
+  stage's mean clean share of its miss plus its errors. The "Fails most" gate
+  relies on this line.
+
 ---
 
 ## Configuration and corpora
@@ -478,5 +599,7 @@ migration.
 | Phase | Attaches at |
 |---|---|
 | 05 Agent loop | done: the A/B (`eval/ablation.py`), budgets and the live run (section 8) |
-| 06 Workflow | each stage gets a typed output in the style of `TriageResult`; a stage can emit through the same `on_event` seam and `LiveEvent` union, so the trace panel gains stages without a new transport |
+| 06 Workflow, Piece A | done: staged analysis and attribution (section 9), eval-only |
+| 06 Workflow, Piece B | patch and verify. Needs a per-issue checkout from before the fix: at the pin every val fix is already applied, so any patch would "pass". |
+| 06 Workflow, Piece C | the stage-segmented trace and a diff viewer in the UI. A stage can emit through the same `on_event` seam and `LiveEvent` union, so the trace panel gains stages without a new transport; this is also where staged runs would reach `/runs` |
 | 07 Production | cache columns in `calls`, nightly `eval.retrieve`, the test split, the second corpus as a held-out generalization check. Also where the live run's limits get revisited: a shared registry (or an events table) for more than one process, and auth |

@@ -26,11 +26,13 @@ from pathlib import Path
 from typing import Callable, NamedTuple
 
 from agent.loop import RunError, run
+from agent.pipeline import run_pipeline
 from api import config as C
 from mining import config as M
 from retrieval import search
 
 from .arms import ARMS, MODEL_ARMS, Arm
+from .attribution import outcome as attribute
 from .retrieve import query_for, score_ranking
 
 RUNS_DIR = Path("data/runs")
@@ -38,7 +40,7 @@ K_VALUES = [1, 5]
 PREVIEW = 2000
 # dollars per run, measured in earlier phases; used until an arm has a successful record
 PRIOR_COST = {"grounded": 0.0018, "agent-no-tools": 0.0018, "agent": 0.0029,
-              "agent-look": 0.0045, "retrieval": 0.0}
+              "agent-look": 0.0045, "retrieval": 0.0, "staged": 0.010}
 
 
 class Job(NamedTuple):
@@ -70,8 +72,14 @@ def done_keys(records: list[dict]) -> set[tuple[str, int, int]]:
 
 
 def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
-                *, run_fn=run) -> dict:
-    """Run one job. Never raises: whatever happened is the record."""
+                *, run_fn=run, pipeline_fn=run_pipeline, regions: dict | None = None) -> dict:
+    """Run one job. Never raises: whatever happened is the record.
+
+    regions maps issue -> {gold_file: [[start, end], ...]}; it is read only by the
+    staged arm, and a missing issue counts as no regions (file-level gold)."""
+    if arm.kind == "pipeline" and regions is None:
+        raise ValueError("the staged arm needs gold regions (pass regions={} to judge "
+                         "every row at file level on purpose)")
     paths = [getattr(c, "path", c) for c in candidates]
     gold = set(row["gold_files"])
     picked: list[str] = []
@@ -79,9 +87,21 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
     trace: list = []
     cost = 0.0
     error = error_kind = None
+    pipeline = arm.kind == "pipeline"
+    stages: dict = {"locate": None, "understand": None, "hypothesis": None}
+    stage_costs: dict = {}
+    dropped: dict = {}
+    failed_stage = None
+    infra = False
     started = time.perf_counter()
     try:
-        if arm.system is None:
+        if pipeline:
+            r = pipeline_fn(row["title"], row["body"], candidates, row["created_at"])
+            picked = list(r.result.suspected_files)
+            turns, trace, cost = r.turns, r.trace, float(r.cost_usd)
+            stages, stage_costs = _stages(r), dict(r.stage_costs)
+            dropped = {k: list(v) for k, v in r.dropped.items() if v}
+        elif arm.system is None:
             picked = list(paths)
         else:
             r = run_fn(row["title"], row["body"], candidates, row["created_at"],
@@ -91,12 +111,20 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
     except RunError as exc:
         error = str(exc)
         error_kind = "api" if error.startswith("API error") else "run"
+        cause = exc.__cause__
+        infra = arm.kind == "pipeline" and cause is not None and not isinstance(cause, RunError)
+        if infra:  # run_pipeline wrapped an infrastructure exception: retry, not a result
+            error_kind = "api"
         turns, trace, cost = exc.run.turns, exc.run.trace, float(exc.run.cost_usd)
+        if pipeline:
+            failed_stage = None if infra else getattr(exc, "stage", None)
+            stages, stage_costs = _stages(exc.run), dict(exc.run.stage_costs)
+            dropped = {k: list(v) for k, v in exc.run.dropped.items() if v}
     except Exception as exc:  # infrastructure, not the arm's fault
         error, error_kind = f"{type(exc).__name__}: {exc}", "api"
     latency_ms = int((time.perf_counter() - started) * 1000)
     scores = score_ranking(picked, gold, K_VALUES)
-    return {
+    rec = {
         "arm": arm.name, "repeat": repeat, "issue": row["issue"],
         "mentions_gold_path": row["mentions_gold_path"], "gold": list(row["gold_files"]),
         "candidates": paths, "picked": picked,
@@ -109,6 +137,28 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
         "cost_usd": cost, "latency_ms": latency_ms,
         "error": error, "split": split, "error_kind": error_kind,
     }
+    if pipeline:
+        gold_regions = (regions or {}).get(row["issue"]) or {}
+        if error_kind == "api":  # infrastructure, whatever stage raised it: no outcome
+            out, fault_hit = None, None
+        else:
+            out, fault_hit = attribute(stages, failed_stage, list(row["gold_files"]),
+                                       gold_regions)
+        rec.update({
+            "stages": stages, "stage_costs": stage_costs, "failed_stage": failed_stage,
+            "dropped": dropped,
+            "outcome": out, "fault_hit": fault_hit,
+            # stored so the report stays pure: every gold file is judged at file level only
+            "file_level_only": all(not gold_regions.get(g) for g in row["gold_files"]),
+        })
+    return rec
+
+
+def _stages(run) -> dict:
+    """The stage outputs that completed, as JSON-safe dicts (None for the rest)."""
+    return {k: (m.model_dump(mode="json") if m is not None else None)
+            for k, m in (("locate", run.locate), ("understand", run.understand),
+                         ("hypothesis", run.hypothesis))}
 
 
 def estimate_cost(jobs: list[Job], records: list[dict]) -> float:
@@ -123,12 +173,15 @@ def estimate_cost(jobs: list[Job], records: list[dict]) -> float:
 
 
 def run_jobs(jobs: list[Job], path: Path, *, workers: int = 4,
-             cap_dollars: float | None = None, run_fn=run) -> dict:
+             cap_dollars: float | None = None, run_fn=run,
+             pipeline_fn=run_pipeline, regions: dict | None = None) -> dict:
     """Run the jobs on a thread pool, appending each record as one flushed line.
 
     Once the actual spend passes cap_dollars no new job starts; jobs already in
     flight finish and are recorded. Skipped jobs are left for a resume."""
     path = Path(path)
+    if regions is None and any(j.arm.kind == "pipeline" for j in jobs):
+        raise ValueError("staged jobs need gold regions; run_jobs got regions=None")
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = threading.Lock()
     state = {"ran": 0, "spent": 0.0, "stopped_for_cap": False}
@@ -153,10 +206,11 @@ def run_jobs(jobs: list[Job], path: Path, *, workers: int = 4,
                 def fail(*a, **k):
                     raise exc
                 rec = make_record(replace(job.arm, system=job.arm.system or ""), job.row,
-                                  job.repeat, [], job.split, run_fn=fail)
+                                  job.repeat, [], job.split, run_fn=fail, pipeline_fn=fail,
+                                  regions=regions)
             else:
                 rec = make_record(job.arm, job.row, job.repeat, candidates, job.split,
-                                  run_fn=run_fn)
+                                  run_fn=run_fn, pipeline_fn=pipeline_fn, regions=regions)
             with lock:
                 fh.write(json.dumps(rec) + "\n")
                 fh.flush()
@@ -229,10 +283,15 @@ def main(argv: list[str] | None = None) -> None:
     other = {r.get("split") for r in existing} - {args.split}
     if other:
         sys.exit(f"{path} holds records from split {sorted(map(str, other))}; use another --name")
-    if any(ARMS[a].system is not None for a in names) and C.PROVIDER != "anthropic":
+    if any(ARMS[a].system is not None or ARMS[a].kind == "pipeline" for a in names) and C.PROVIDER != "anthropic":
         sys.exit("model arms need PROVIDER=anthropic")
 
-    jobs = pending_jobs([ARMS[a] for a in names], val_rows(args.split, args.n),
+    rows = val_rows(args.split, args.n)
+    regions = None
+    if any(ARMS[a].kind == "pipeline" for a in names):  # once per run, only for the staged arm
+        from .gold_regions import load_regions
+        regions = load_regions(rows)
+    jobs = pending_jobs([ARMS[a] for a in names], rows,
                         args.repeats, args.split, done_keys(existing))
     estimate = estimate_cost(jobs, existing)
     # every record was paid for, errors included; the cap bounds the file, not this invocation
@@ -244,7 +303,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(f"estimate ${estimate:.2f} + ${spent_before:.2f} already spent exceeds "
                  f"--max-dollars {args.max_dollars} for this file; "
                  "raise it or shrink --n/--repeats/--arms")
-    out = run_jobs(jobs, path, cap_dollars=args.max_dollars - spent_before)
+    out = run_jobs(jobs, path, cap_dollars=args.max_dollars - spent_before, regions=regions)
     print(f"  ran {out['ran']}   ${out['spent']:.2f}")
     if out["stopped_for_cap"]:
         print(f"  stopped: the file's total spend passed ${args.max_dollars:.2f}; "

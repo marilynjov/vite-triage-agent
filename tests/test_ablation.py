@@ -275,3 +275,157 @@ def test_resume_stops_once_file_total_passes_cap(tmp_path):
                             cap_dollars=3.0 - 2.98, run_fn=_fake(["b"]))
     assert out["stopped_for_cap"] is True
     assert 2.98 + out["spent"] > 3.0 and 2.98 + out["spent"] <= 3.0 + 0.011
+
+
+# --- the staged arm ---------------------------------------------------------
+
+from agent.pipeline import PipelineError, PipelineRun  # noqa: E402
+from api.schema import LocateResult, LocatedFile, Region, UnderstandResult  # noqa: E402
+
+STAGED_KEYS = FIELDS | {"stages", "stage_costs", "failed_stage", "outcome", "fault_hit",
+                        "file_level_only", "dropped"}
+REGIONS = {7: {"b": [[10, 20]]}}
+
+
+class _Hyp:
+    def __init__(self, files, fault):
+        self.suspected_files, self._fault = files, fault
+
+    def model_dump(self, **kw):
+        return {"suspected_files": self.suspected_files, "fault": self._fault}
+
+
+def _pipeline_run(files=("b",), hyp=True):
+    pr = PipelineRun(
+        locate=LocateResult(reasoning="r", files=[LocatedFile(path="b", why="w", evidence="e")]),
+        understand=UnderstandResult(reasoning="r", regions=[
+            Region(path="b", symbol=None, start_line=12, end_line=15, what_it_does="x",
+                   relevance="y")]),
+        runs={"locate": _run(["b"]), "understand": _run(["b"], turns=2)})
+    if hyp:
+        pr.hypothesis = _Hyp(list(files), {"path": "b", "start_line": 11, "end_line": 13,
+                                           "mechanism": "m"})
+        pr.runs["hypothesize"] = _run(["b"])
+    return pr
+
+
+def _staged(pipeline_fn, regions=REGIONS, row=ROW):
+    return ablation.make_record(ARMS["staged"], row, 0, ["a", "b"], "val",
+                                pipeline_fn=pipeline_fn, regions=regions)
+
+
+def test_staged_record_has_stage_fields_and_outcome():
+    calls = []
+
+    def fn(title, body, candidates, cutoff, **kw):
+        calls.append(kw)
+        return _pipeline_run()
+    r = _staged(fn)
+    assert calls == [{}]  # pipeline_fn really ran, with no system/tool_specs
+    assert set(r) == STAGED_KEYS
+    assert r["picked"] == ["b"] and r["error"] is None and r["error_kind"] is None
+    assert r["outcome"] == "hit" and r["fault_hit"] is True and r["failed_stage"] is None
+    assert r["file_level_only"] is False
+    assert set(r["stage_costs"]) == {"locate", "understand", "hypothesize"}
+    assert r["turns"] == 4 and r["cost_usd"] > 0
+    json.dumps(r)
+
+
+def test_staged_missing_regions_are_file_level():
+    r = _staged(lambda *a, **k: _pipeline_run(), regions={})
+    assert r["outcome"] == "hit" and r["fault_hit"] is None and r["file_level_only"] is True
+
+
+def test_staged_pipeline_error_records_failed_stage():
+    pr = _pipeline_run(hyp=False)
+
+    def fn(*a, **k):
+        raise PipelineError("turn cap", pr, "hypothesize")
+    r = _staged(fn)
+    assert r["outcome"] == "error:hypothesize" and r["failed_stage"] == "hypothesize"
+    assert r["error_kind"] == "run" and r["fault_hit"] is None
+    assert (r["recall_at_1"], r["recall_at_5"], r["rr"]) == (0, 0, 0)
+    assert r["cost_usd"] > 0 and r["turns"] == 3 and set(r["stage_costs"]) == {"locate", "understand"}
+    assert r["stages"]["locate"] is not None and r["stages"]["hypothesis"] is None
+
+
+def test_staged_early_error_keeps_locate_cost():
+    def fn(*a, **k):
+        raise PipelineError("API error: boom", PipelineRun(runs={"locate": _run([])}), "locate")
+    r = _staged(fn)
+    assert r["error_kind"] == "api" and r["outcome"] is None and r["fault_hit"] is None
+    assert r["failed_stage"] == "locate" and r["cost_usd"] > 0
+    assert ablation.done_keys([r]) == set()
+
+
+def test_staged_non_run_error_is_infrastructure():
+    def fn(*a, **k):
+        raise ConnectionError("down")
+    r = _staged(fn)
+    assert r["error_kind"] == "api" and r["outcome"] is None and r["failed_stage"] is None
+    assert r["stages"] == {"locate": None, "understand": None, "hypothesis": None}
+    assert ablation.done_keys([r]) == set()  # resume retries it
+
+
+def test_other_arms_records_unchanged():
+    assert set(_rec("agent")) == FIELDS
+    assert set(_rec("retrieval")) == FIELDS
+
+
+def test_run_jobs_staged_calls_pipeline_fn(tmp_path):
+    seen = []
+
+    def fn(*a, **k):
+        seen.append(1)
+        return _pipeline_run()
+    job = ablation.Job(ARMS["staged"], ROW, 0, "val", lambda: ["a", "b"])
+    ablation.run_jobs([job], tmp_path / "r.jsonl", workers=1, pipeline_fn=fn, regions=REGIONS)
+    rec = json.loads((tmp_path / "r.jsonl").read_text())
+    assert seen == [1] and rec["outcome"] == "hit"
+
+
+def test_retrieval_failure_on_staged_never_runs_the_pipeline(tmp_path):
+    def boom():
+        raise OSError("index gone")
+
+    def real(*a, **k):
+        raise AssertionError("pipeline must not run")
+    job = ablation.Job(ARMS["staged"], ROW, 0, "val", boom)
+    ablation.run_jobs([job], tmp_path / "r.jsonl", workers=1, pipeline_fn=real, regions={})
+    rec = json.loads((tmp_path / "r.jsonl").read_text())
+    assert rec["error_kind"] == "api" and "index gone" in rec["error"] and rec["cost_usd"] == 0
+
+
+def test_staged_prior_cost():
+    job = ablation.Job(ARMS["staged"], ROW, 0, "val", lambda: [])
+    assert ablation.estimate_cost([job], []) == pytest.approx(0.010)
+
+
+def test_staged_wrapped_infrastructure_error_is_api():
+    def fn(*a, **k):
+        try:
+            raise ConnectionError("down")
+        except ConnectionError as c:
+            raise PipelineError("ConnectionError: down", _pipeline_run(hyp=False), "locate") from c
+    r = _staged(fn)
+    assert r["error_kind"] == "api" and r["outcome"] is None and r["failed_stage"] is None
+    assert r["cost_usd"] > 0
+    assert ablation.done_keys([r]) == set()
+
+
+def test_staged_run_error_cause_stays_run():
+    def fn(*a, **k):
+        try:
+            raise RunError("cap", _pipeline_run())
+        except RunError as c:
+            raise PipelineError("cap", _pipeline_run(hyp=False), "understand") from c
+    r = _staged(fn)
+    assert r["error_kind"] == "run" and r["outcome"] == "error:understand"
+
+
+def test_staged_without_regions_raises(tmp_path):
+    with pytest.raises(ValueError):
+        ablation.make_record(ARMS["staged"], ROW, 0, [], "val", pipeline_fn=lambda *a, **k: 1)
+    job = ablation.Job(ARMS["staged"], ROW, 0, "val", lambda: [])
+    with pytest.raises(ValueError):
+        ablation.run_jobs([job], tmp_path / "r.jsonl")

@@ -31,6 +31,7 @@ class Arm:
     name: str
     system: str | None  # None: no model call
     tool_specs: list[dict]
+    kind: str = "loop"  # "pipeline": the staged pipeline, not the one agent loop
 
 
 ARMS: dict[str, Arm] = {a.name: a for a in (
@@ -39,6 +40,8 @@ ARMS: dict[str, Arm] = {a.name: a for a in (
     Arm("agent", AGENT_SYSTEM, TOOL_SPECS),
     Arm("agent-look", AGENT_SYSTEM + "\n\n" + LOOK_FIRST, TOOL_SPECS),
     Arm("retrieval", None, []),
+    Arm("staged", None, [], kind="pipeline"),
 )}
 
 MODEL_ARMS = ("grounded", "agent-no-tools", "agent", "agent-look")
+PIPELINE_ARMS = ("staged",)

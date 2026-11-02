@@ -238,3 +238,12 @@ def check_in_scope(result: GroundedTriageResult) -> None:
            if f not in tracked or not M.is_gold_candidate(f)]
     if bad:
         raise ValueError(f"suspected_files not in scope at the pinned tree: {', '.join(bad)}")
+
+
+def file_length(path: str) -> int | None:
+    """Lines in a file at the pin (counted as read_file does), or None if not a file there."""
+    p = _safe(path)
+    if not p or _kind(p) != "blob":
+        return None
+    r = _git("show", f"{pinned_sha()}:{p}")
+    return len(_split_lines(r.stdout)) if r.returncode == 0 else None
