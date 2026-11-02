@@ -21,7 +21,7 @@ the top k the system proposed?
 | 03 Retrieval | chunking, embeddings in pgvector, the recall@k harness | recall@10 64.1% → 68.5% from a path + imports header |
 | 03→04 Grounded triage | the model re-ranks retrieval's top 10 | recall@1 24.1% → 44.5% (206 rows) |
 | 04 Tools | four git tools at the pinned commit, a hand-written tool-use loop, `/triage/agent`, a trace in the UI | recall@1 41.5% vs grounded 30.4% (40 rows), but 26/40 runs used no tools |
-| 05 The agent loop | in progress: first, [does looking pay?](docs/superpowers/specs/2026-11-01-phase-05a-does-looking-pay-design.md) | |
+| 05 The agent loop | in progress: first, [does looking pay?](docs/superpowers/specs/2026-11-01-phase-05a-does-looking-pay-design.md) | clean recall@1 on 206 rows: 24.1% retrieval, 45.2% grounded, 53.1% agent (agent vs grounded paired interval excludes 0), $0.0031 vs $0.0018 per triage |
 
 Every number, with its caveats, is in [MEASUREMENTS.md](MEASUREMENTS.md). How
 the pieces fit and why each boundary is where it is: [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -67,6 +67,8 @@ comparable. The test split stays sealed until Phase 07.
 | `python -m eval.classify --n 40` | Phase 02 issue type, severity, components | free locally |
 | `PROVIDER=anthropic python -m eval.grounded --n 40` | the model re-ranking retrieval's top 10 | ~$0.07 |
 | `PROVIDER=anthropic python -m eval.agent --n 40` | retrieval vs grounded vs the tool agent | ~$0.18 |
+| `PROVIDER=anthropic python -m eval.ablation --arms retrieval,grounded,agent-no-tools,agent,agent-look --n 40 --repeats 3` | the Phase 05a arms (retrieval, grounded, agent-no-tools, agent, agent-look) on the same rows, written to `data/runs/` | ~$1.20 |
+| `python -m eval.ablation --report PATH` | scores, paired intervals, cost and tool use from a run file | free |
 | `PROVIDER=anthropic python -m agent.explain <issue#>` | one run's message array, turn by turn | ~$0.01 |
 | `python -m pytest -q` | the test suite; no paid calls | free |
 

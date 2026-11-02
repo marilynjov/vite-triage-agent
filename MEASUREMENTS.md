@@ -472,3 +472,240 @@ the agent finds by grep may exist only because the fix for the issue landed, so
 "found outside" is optimistic by an amount this run cannot separate. The
 `cutoff` argument limits git_log, which was never called. File-level, as
 everywhere in Phase 03.
+
+## Phase 05a — does looking pay? (40 rows × 3 repeats)
+
+Four arms ran on the same 40 val rows, three repeats each, with the same 10
+retrieved candidates per issue (retrieval runs once per issue): `grounded`,
+`agent-no-tools` (agent prompt, no tools), `agent` (agent prompt plus the four
+tools), `agent-look` (agent plus the look-first nudge). 480 records, $1.1772
+in total, 2 run errors, 0 api errors. Everything below is the output of
+`python -m eval.ablation --report data/runs/val-n40-r3.jsonl`.
+
+**Scores** (clean, n=99 runs = 33 issues × 3 repeats; mean over repeats, with
+the min-max of the per-repeat scores):
+
+| arm | recall@1 | recall@5 | MRR | flip rate |
+|---|---|---|---|---|
+| grounded | 0.334 (0.304-0.365) | 0.486 (0.451-0.541) | 0.502 (0.495-0.510) | 0.061 |
+| agent-no-tools | 0.339 (0.304-0.380) | 0.445 (0.405-0.466) | 0.492 (0.465-0.530) | 0.091 |
+| agent | 0.434 (0.395-0.456) | 0.575 (0.567-0.587) | 0.598 (0.563-0.616) | 0.212 |
+| agent-look | 0.395 (0.395-0.395) | 0.590 (0.572-0.612) | 0.574 (0.566-0.581) | 0.061 |
+
+On all 40 rows (n=120 runs) recall@1 is 0.386 / 0.375 / 0.478 / 0.429 in the
+same order; recall@5 and MRR are in the report output kept with the run.
+
+**Paired comparisons** (clean, recall@1, 33 issues; each arm's mean over its
+repeats per issue; difference is the second arm minus the first):
+
+| comparison | wins | losses | ties | diff | 95% interval | excludes 0 |
+|---|---|---|---|---|---|---|
+| grounded → agent-no-tools | 2 | 1 | 30 | +0.005 | [-0.020, +0.035] | no |
+| agent-no-tools → agent | 7 | 0 | 26 | +0.094 | [+0.030, +0.175] | yes |
+| agent → agent-look | 1 | 6 | 26 | -0.039 | [-0.084, +0.005] | no |
+| grounded vs agent | 9 | 1 | 23 | +0.099 | [+0.027, +0.187] | yes |
+| grounded vs agent-look | 4 | 2 | 27 | +0.061 | [-0.020, +0.162] | no |
+
+The same chain on all 40 rows (40 issues, recall@1):
+
+| comparison | wins | losses | ties | diff | 95% interval | excludes 0 |
+|---|---|---|---|---|---|---|
+| grounded → agent-no-tools | 3 | 3 | 34 | -0.011 | [-0.046, +0.021] | no |
+| agent-no-tools → agent | 9 | 0 | 31 | +0.103 | [+0.039, +0.178] | yes |
+| agent → agent-look | 1 | 8 | 31 | -0.049 | [-0.090, -0.008] | yes |
+| grounded vs agent | 11 | 1 | 28 | +0.091 | [+0.028, +0.164] | yes |
+| grounded vs agent-look | 5 | 3 | 32 | +0.043 | [-0.025, +0.125] | no |
+
+Clean is the primary subset and the one quoted throughout, because the "all"
+subset includes rows whose issue text names the gold file, and finding those
+is string matching, not triage. Both subsets are shown where they differ in
+verdict.
+
+**Method.** The interval is a bootstrap over issues: 10,000 resamples, seed 0,
+95% interval by linear-interpolation percentiles (numpy's default). A
+difference counts only if its interval excludes zero; an interval touching
+exactly 0 does not count. The Scores table weights each repeat equally (mean of
+per-repeat means) while the Paired table weights each issue equally (repeats
+averaged per issue), so the two can differ when an issue has fewer repeats than
+others (api errors are excluded); here they coincide.
+
+**Flip rate.** The share of issues whose rank-1 hit differs across repeats:
+0.061 grounded, 0.091 agent-no-tools, 0.212 agent, 0.061 agent-look (clean).
+The `agent` arm is the least stable: one issue in five changes its rank-1 hit
+between repeats. One hypothesis is that tool use adds a branch (look or not
+look) that the model takes differently from run to run, but the data partly
+contradict it: `agent-look` used tools more (53% of runs against 33%) and has a
+flip rate of 0.061 against `agent`'s 0.212. The flip rate here is not
+explained by how often tools are used. `agent-look` is as stable as `grounded`, and its
+three repeats scored exactly 0.395 each, which is a coincidence of the counts,
+not zero variance (its clean flip rate is 0.061).
+
+**Tool behaviour.**
+
+| arm | used any tool | turns mean/p50/max | calls | tool error rate | picks seen |
+|---|---|---|---|---|---|
+| agent | 0.33 | 1.5/1/6 | grep=53, read_file=18 | 0.01 | 0.19 |
+| agent-look | 0.53 | 1.9/2/6 | git_log=1, grep=78, list_dir=2, read_file=45 | 0.01 | 0.32 |
+
+"Picks seen" is the share of picked files that appear in some tool output
+during the run. It is descriptive only, not causal.
+
+**Cost.**
+
+| arm | $/triage | $/correct | p50 ms | p95 ms |
+|---|---|---|---|---|
+| grounded | 0.0018 | 0.0037 | 5990 | 8671 |
+| agent-no-tools | 0.0018 | 0.0039 | 6600 | 8546 |
+| agent | 0.0028 | 0.0048 | 6944 | 12335 |
+| agent-look | 0.0034 | 0.0065 | 7632 | 11977 |
+
+Failed runs are counted as zero hits and as paid. Run errors: 1 `grounded` (#14690 repeat 1) and 1 `agent-look` (#14065 repeat 1), both "final answer rejected: suspected_files not in scope at the pinned tree".
+
+**Decision rule.** The rule was fixed before the run: confirm the agent arm
+with the highest clean recall@1 whose paired interval against `grounded`
+excludes zero; if two qualify with equal clean recall@1, the first in arm order
+(agent-no-tools, agent, agent-look) wins, the simpler arm. Only `agent`
+qualifies (+0.099, [+0.027, +0.187]), so the chosen arm is **agent**. No tie
+arose.
+
+**Finding 1: the tools, not the prompt, produce the gain.** Moving from
+`grounded` to `agent-no-tools` changes only the system prompt and moves clean
+recall@1 by +0.005 with an interval that includes zero (2 wins, 1 loss, 30
+ties). Adding the tools on top moves it by +0.094 with an interval that
+excludes zero (7 wins, 0 losses, 26 ties). `agent-no-tools` made 0 tool calls, by construction. Caveat: `AGENT_SYSTEM`
+describes the four tools and allows naming files outside the candidates once a
+tool confirms them, so `agent-no-tools` measures that prompt with its tools
+absent. Interpretation, not tested: with no tools the model can only reorder the same ten candidates,
+which `grounded` already does; with tools it can grep and read a file before
+it picks. This corrects the Phase 04 reading, where the agent's lift over grounded could
+not be split between prompt and tools. `agent-no-tools` does lose recall@5
+(0.445 against 0.486), which the paired test above does not cover; that
+difference is not tested here.
+
+**Finding 2: the look-first nudge did not pay.** `agent-look` made more tool
+calls (53% of runs used a tool against 33%, 126 calls against 71) and cost more
+($0.0034 a triage against $0.0028; $0.0065 a correct answer against $0.0048),
+yet its clean recall@1 is lower than `agent`'s (0.395 against 0.434): 1 win
+and 6 losses on the 33 issues, difference -0.039, interval [-0.084, +0.005].
+On clean rows, the primary subset, that interval includes zero, so the clean
+rows alone cannot say the nudge hurts. On all 40 rows the decrease counts:
+-0.049, [-0.090, -0.008], 1 win and 8 losses on 40 issues. That result counts
+against the nudge. The all-rows subset includes rows that name the gold file,
+so it is not the primary result, but it points the same way as the clean one
+(the sign and the loss count agree). The run says the nudge did not help, cost
+more, and on all rows scored lower. Against `grounded`, `agent-look` is
++0.061 with an interval that includes zero, so it is not distinguishable from
+grounded here either. Mechanism, as a hypothesis this run does not test: the
+nudge sends the model to tools on rows where the excerpts were enough, and a
+file found by grep that is not the gold file can displace a correct top
+candidate. The picks-seen share rose from 0.19 to 0.32, consistent with the
+model leaning on tool output, but that statistic is not causal. `agent-look`
+did raise clean recall@5 slightly (0.590 against 0.575); that is not tested
+either.
+
+**Finding 3: agency costs about 1.3 times as much per correct answer, not 1.6.**
+Per triage `agent` is 1.6 times `grounded` ($0.0028 against $0.0018), but per
+correct answer it is $0.0048 against $0.0037, because it is right more often.
+At these prices the cost is not what decides it.
+
+**Caveats.**
+- Arm `grounded` here runs through the agent loop with the in-scope check, so it
+  is not byte-identical to Phase 04's `/triage/grounded`. Its 40-row clean
+  recall@1 was 33.4% and 30.4% on two Phase 04 runs; here it is 0.334 (0.304-0.365
+  across repeats). The Phase 04 run-to-run spread was 3.0 points (33.4% against
+  30.4%); the gap between `grounded` and `agent-no-tools` is +0.005, half a
+  point, so the spread is about six times the gap. Noise swamps that gap.
+- The tools read code as of the pin, after every val fix, as the retrieval
+  index always has. A file the agent finds by grep may exist only because the
+  fix for the issue landed, so the tool arms' gain is possibly optimistic, by an
+  amount this run cannot measure.
+- 40 rows, 33 clean. One clean row is ~3 points of recall@1 (one issue of 33),
+  so the +0.094 and +0.099 gains are 3 rows' worth and the intervals are wide
+  (the lower ends are +0.030 and +0.027). Nine wins in `grounded` vs `agent` is
+  a small count.
+- Three repeats per arm; the `agent` arm's spread across repeats (0.395-0.456)
+  is itself 2 rows' worth.
+- File-level scoring, as everywhere in Phase 03. The confirmation on the
+  larger split is in the 206-row section below.
+
+---
+
+## Phase 05a — confirmation on all 206 val rows
+
+The 40-row stage's decision rule chose `agent`, so the confirmation ran three
+arms on every val row, one repeat each: `retrieval` (no model), `grounded`, and
+`agent`. 618 records, $1.0064 in total, 3 run errors (all in `agent`), 0 api
+errors. `PROVIDER=anthropic python -m eval.ablation --arms retrieval,grounded,agent --split val --n 206 --repeats 1 --max-dollars 3`.
+Everything below is the output of
+`python -m eval.ablation --report data/runs/val-n206-r1.jsonl`.
+
+**Scores** (one repeat, so no min-max spread; flip rate is n/a):
+
+| arm | subset | runs | recall@1 | recall@5 | MRR |
+|---|---|---|---|---|---|
+| retrieval | clean (n=175) | 175 | 0.241 | 0.540 | 0.438 |
+| grounded | clean (n=175) | 175 | 0.452 | 0.584 | 0.602 |
+| agent | clean (n=175) | 175 | 0.531 | 0.671 | 0.683 |
+| retrieval | all | 206 | 0.261 | 0.570 | 0.464 |
+| grounded | all | 206 | 0.481 | 0.614 | 0.637 |
+| agent | all | 206 | 0.553 | 0.695 | 0.708 |
+
+The `retrieval` row is the candidate order with no model call.
+
+**Paired comparisons** (recall@1, b against a, 95% bootstrap over issues, same
+method as the 40-row section):
+
+| comparison | subset | issues | wins | losses | ties | diff | 95% interval | verdict |
+|---|---|---|---|---|---|---|---|---|
+| retrieval -> agent | clean | 175 | 62 | 5 | 108 | +0.290 | [+0.216, +0.364] | counts |
+| retrieval -> grounded | clean | 175 | 49 | 6 | 120 | +0.211 | [+0.141, +0.280] | counts |
+| grounded -> agent | clean | 175 | 22 | 8 | 145 | +0.080 | [+0.026, +0.134] | counts |
+| retrieval -> agent | all | 206 | 75 | 7 | 124 | +0.293 | [+0.222, +0.363] | counts |
+| retrieval -> grounded | all | 206 | 60 | 7 | 139 | +0.220 | [+0.156, +0.285] | counts |
+| grounded -> agent | all | 206 | 25 | 10 | 171 | +0.072 | [+0.023, +0.124] | counts |
+
+**Cost.**
+
+| arm | $/triage | $/correct | p50 ms | p95 ms | run errors | api errors |
+|---|---|---|---|---|---|---|
+| retrieval | 0.0000 | 0.0000 | 0 | 0 | 0 | 0 |
+| grounded | 0.0018 | 0.0031 | 6224 | 8636 | 0 | 0 |
+| agent | 0.0031 | 0.0048 | 7270 | 12162 | 3 | 0 |
+
+`retrieval` is free (no model call). `agent` costs more per triage ($0.0031 against $0.0018)
+and per correct answer ($0.0048 against $0.0031).
+
+**Tool use (`agent`).** 38% of runs used a tool (0.38). Turns per run:
+mean 1.7, median 1, max 7. Calls by tool: grep 107, read_file 53, list_dir 6,
+git_log 1. Tool error rate 0.01. The share of final picks that appeared in tool
+output ("picks seen") is 0.24.
+
+**Gate verdict.** On the 206 val rows `agent` scores higher clean recall@1 than
+retrieval alone (0.531 against 0.241, +0.290, interval [+0.216, +0.364]) and
+than `grounded` (0.531 against 0.452, +0.080, interval [+0.026, +0.134]), at
+about 1.7 times `grounded`'s cost per triage ($0.0031 against $0.0018) and
+about 1.5 times its cost per correct answer ($0.0048 against $0.0031).
+
+The sign, size and verdict match the 40-row stage (+0.099 on its clean rows),
+and the all-rows subset agrees (+0.072, interval excludes zero). The interval is
+wide: its lower end is +0.026. Reading the 22 wins and 8
+losses: the gain is a net of 14 issues, and 145 of 175 issues did not change.
+
+**Caveats.**
+- One repeat per row here. The 40-row stage measured run-to-run variation: the
+  `agent` flip rate there was 0.212 (clean), so a single repeat on any one
+  issue is noisy; the bootstrap over 175 issues accounts for sampling of issues
+  but not for the model's run-to-run variation on the same issue.
+- Arm `grounded` runs through the agent loop with the in-scope check, so it is
+  not byte-identical to Phase 04's 206-row `/triage/grounded` result. It scores
+  clean recall@1 0.452 here against 44.5% there, a 0.7 point difference; this
+  run cannot say whether that is the loop or run-to-run variation.
+- The tools read the code as of the pin, after every val fix. A file the agent
+  finds by grep may exist only because the fix for the issue landed, so the
+  gain is possibly optimistic, by an amount this run cannot measure.
+- Rows whose issue text names the gold file are excluded from clean (n=175 of
+  206). Clean is the subset quoted; the all-rows numbers are given for
+  completeness.
+- File-level scoring, as everywhere in Phase 03.
+- Three `agent` runs ended in a run error, all on clean rows. They score
+  recall@1 = 0, so the `agent` figure is conservative.

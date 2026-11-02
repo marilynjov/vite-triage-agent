@@ -143,6 +143,33 @@ zero.
 outside the candidates, so it also reports the gold files only it could have
 found. A failed run scores zero, as it is a 500 in production.
 
+`eval/ablation.py` is the Phase 05a question, "does looking pay?": five arms
+on the same rows and the same retrieved candidates (retrieval runs once per
+issue). Adjacent arms differ in exactly one thing, so a score gap has one
+explanation. All model arms go through `agent.loop.run(system=, tool_specs=)`,
+so none differs by code path; an empty `tool_specs` omits the tools.
+
+| arm | system prompt | tools | what it adds over the one above |
+|---|---|---|---|
+| retrieval | none (no model) | none | the candidate order |
+| grounded | grounded re-rank | none | one model call re-ranking the candidates |
+| agent-no-tools | agent prompt | none | the agent prompt |
+| agent | agent prompt | four read-only tools | the tools |
+| agent-look | agent prompt + look-first nudge | four read-only tools | an instruction to use them |
+
+Each run is one JSONL record in `data/runs/<split>-n<N>-r<R>.jsonl`: `arm`,
+`repeat`, `issue`, `split`, `gold`, `mentions_gold_path`, `candidates`,
+`picked`, `recall_at_1`, `recall_at_5`, `rr`, `turns`, `tool_calls`,
+`input_tokens`, `output_tokens`, `cost_usd`, `latency_ms`, `error` and
+`error_kind`. The file is the source of truth: the run resumes from it, a
+spend cap (`--max-dollars`) bounds the file's lifetime spend (the sum of
+`cost_usd` over every record in it, errors included): the run refuses to start
+if that sum plus the estimate exceeds the cap, and stops starting new jobs once
+the file's total passes it, so resumes cannot each spend a fresh cap. The report
+is computed from the file alone, so reading results costs nothing:
+`python -m eval.ablation --report PATH`. Differences between arms are paired
+bootstrap intervals over issues, on `clean` rows.
+
 `eval/classify.py` scores Phase 02 output against GitHub labels (severity
 from `p2`/`p3`/`p4`, components from `feat: *`). It always prints the
 majority-class baseline, because a constant answer once beat a real prompt.
