@@ -29,7 +29,7 @@ what the fix actually touched. That one constraint explains most of the design.
             ├──► api.triage ──► providers ──► (Grounded)TriageResult ──► /triage/* │
             │                                       │                              │
             └──► agent.loop ⇄ agent.tools (git @ pin) ──► GroundedTriageResult     │
-                 (/triage/agent)                    │                              │
+                 (/triage/agent, /runs)             │                              │
                                                     └──► Postgres `calls` (every   │
                                                          model call, incl. failures│
                     └──────────────────────────────────────────────────────────────┘
@@ -40,7 +40,8 @@ first retrieves the top 10 files and asks the model to pick, from those only,
 the ones the fix touches. It is scored by `eval/grounded.py` against retrieval
 alone on the same rows. `/triage/agent` starts from the same candidates but lets
 the model open files before it answers (section 7). It is scored by
-`eval/agent.py`.
+`eval/agent.py`. `POST /runs` runs the same loop in the background and streams
+its steps to the browser as they happen (section 8).
 
 ---
 
@@ -51,15 +52,15 @@ the model open files before it answers (section 7). It is scored by
 | `mining/` | issue → fix labels, the pinned SHA, the temporal split | git, GitHub REST |
 | `retrieval/` | chunking, embedding, the `chunks` table, search | Ollama (embeddings), Postgres |
 | `eval/` | scoring: `retrieve` (recall@k, MRR), `grounded` (model re-rank vs retrieval), `agent` (retrieval vs grounded vs agent), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `agent/`, `api/` |
-| `agent/` | the four git tools, the tool-use loop, the SDK-runner comparison, `explain` (prints a run's message array) | `api/` (prompt, cost, schema), `retrieval/`, git |
-| `api/` | FastAPI routes, prompts, the provider seam, cost, the `calls` table | `retrieval/`, `agent/`, providers, Postgres |
-| `web/` | one React page over the API | `api/` over HTTP |
+| `agent/` | the four git tools, the tool-use loop and its budgets, the SDK-runner comparison, `explain` (prints a run's message array) | `api/` (prompt, cost, schema), `retrieval/`, git |
+| `api/` | FastAPI routes, prompts, the provider seam, cost, the `calls` table, the in-memory live-run registry (`live.py`) | `retrieval/`, `agent/`, providers, Postgres |
+| `web/` | one React page over the API, including the live trace reducer (`liveRun.ts`) | `api/` over HTTP |
 | `scripts/` | `gen_types.py`: Pydantic → TypeScript | `api/schema.py` |
 
 There is no module-level import cycle. `mining/` imports nothing from the
 rest, so ground truth can't be shaped by the code it grades. `agent/` depends
 on `api/`'s contract, prompt and cost modules (`schema`, `triage`, `cost`,
-`config`, `providers.base`). `api/main.py` imports `agent/` for one route. The
+`config`, `providers.base`). `api/main.py` imports `agent/` for the two agent routes (`/triage/agent` and `/runs`). The
 agent's CLIs (`explain`, `runner`) import `eval.retrieve` for `query_for`.
 
 ---
@@ -194,7 +195,13 @@ route ─► triage.py (owns the prompt) ─► providers.complete[_structured] 
   API's own message array.
 - **`calls` table.** One row per model call, written on success *and*
   failure. Cache-token columns have existed since day one, so Phase 07's
-  caching gate needs no migration. `GET /calls` reads it back.
+  caching gate needs no migration. `GET /calls` reads it back. The agent's two routes tag their rows with
+  their own `endpoint` (`/triage/agent`, `/runs`), so the two paths stay
+  separable in the table.
+- **Routes.** `POST /triage/{naive,structured,grounded,agent}` and `POST /runs`
+  make model calls. `GET /runs/limits`, `GET /runs/{id}` and
+  `GET /runs/{id}/events` read a live run (section 8). `GET /calls`,
+  `/retrieve`, `/corpora` and `/health` make none.
 - **Cost is computed, not estimated.** `cost.py` prices the token counts the
   provider reports, at four rates (input, output, cache write, cache read).
   Local models cost $0.
@@ -232,10 +239,11 @@ chain-of-thought instead of a justification written after the verdict.
 ## 6. Web
 
 `web/` is Vite + React + TypeScript with `useState` only: no component
-library, no state library, no data-fetching library. It posts to
-`/triage/{naive,structured,agent}` and renders the typed result
+library, no state library, no data-fetching library. The two triage buttons post to
+`/triage/{naive,structured}` and render the typed result
 (`/triage/grounded` has no button; `eval/grounded.py` and
-`eval/agent.py` call `api.triage.triage_grounded` directly). CORS allows only
+`eval/agent.py` call `api.triage.triage_grounded` directly). The Agent button
+starts a live run instead (section 8). CORS allows only
 `http://localhost:5173`.
 
 ## 7. Agent: tools at the pin, a loop you can read
@@ -250,7 +258,8 @@ issue ─► retrieval top 10 ─► agent.loop.run ─► messages.create ─�
 
 The agent gets four read-only tools (`list_dir`, `read_file`, `grep`,
 `git_log`) and the grounded candidates as a starting point, not a boundary.
-`/triage/agent` needs `PROVIDER=anthropic`, because the loop uses tool use.
+`/triage/agent` needs `PROVIDER=anthropic`, because the loop uses tool use. The
+browser no longer calls it; the live run of section 8 wraps the same loop.
 
 - **Tools read git, not the working tree.** Each one calls `git show`,
   `git grep <sha>`, `git ls-tree` or `git log` against the pinned SHA. The
@@ -302,9 +311,10 @@ conversation can be read top to bottom:
   the matching id, and all results for one response travel together. The
   trace keeps the first 2,000 characters of each output; the model gets the
   whole capped result.
-- **`AGENT_MAX_TURNS` stops a model that never finishes** (default 12).
+- **Budgets stop a model that never finishes.** Section 8 lists the four
+  limits; `AGENT_MAX_TURNS` is the oldest of them.
 - **`RunError` carries the partial run.** A rejected answer, an unexpected
-  `stop_reason` and an exhausted turn limit all raise it with `.run` attached,
+  `stop_reason` and a budget stop all raise it with `.run` attached,
   so the turns already paid for still get recorded.
 - **The output schema is transformed, then enforced.** The API rejects
   constraints like `maxItems`, so `OUTPUT_SCHEMA` goes through
@@ -321,6 +331,113 @@ quickest way to see the append-only rule. `agent/runner.py` drives the same
 four functions with the SDK's `tool_runner`. It is a comparison on three
 issues, not a production path; what it did and didn't do for us is in
 [`docs/phase-04-runner.md`](docs/phase-04-runner.md).
+
+## 8. Live run: watch the agent work, without owning the run
+
+```
+browser ─ POST /runs ─► registry.start ─► asyncio task (server-owned)
+   ▲                                          │ retrieval, then agent.loop.run(on_event=)
+   │ SSE: id = seq                            ▼
+   └──── GET /runs/{id}/events ◄── registry (numbered events, in memory) ◄── append
+```
+
+`POST /runs` takes the same body as `/triage/agent` and returns a `run_id`
+at once. The browser then reads the run's events from a separate stream. The
+loop is the one from section 7; it only gained an optional `on_event`
+callback and budgets.
+
+- **Seven events, one union.** `run_started` carries the retrieved candidates.
+  The loop then emits `step_started` (a turn begins), `usage` (that turn's
+  tokens and cost, plus running totals), `tool_called`, `tool_returned` (a
+  preview of the output, whether it errored, how long it took) and finally
+  exactly one of `done` (the validated result) or `failed` (the reason, and
+  the limit that tripped if it was a budget). The union lives in
+  `api/schema.py` beside `TriageResult`, so the same generator emits the
+  TypeScript and a field change breaks the frontend build. The registry
+  validates every event on the way in, so a malformed one never reaches a
+  client.
+- **A callback can't break the run.** The loop emits through a wrapper that
+  swallows the callback's exceptions. A broken observer costs a missing event,
+  not a lost triage.
+- **Budgets are four limits, checked before a call.** `AGENT_MAX_TURNS` (12),
+  `AGENT_MAX_TOKENS` (150,000, input plus output), `AGENT_MAX_SECONDS` (180)
+  and `AGENT_MAX_DOLLARS` (0.05). Before every API call after the first, the
+  loop compares the run's totals with the four caps and raises
+  `BudgetExceeded` naming the limit and its setting. **The overshoot is up to
+  one call, stated plainly.** A limit is only noticed once a call has already
+  made the total cross it, because the cost of a call isn't known before it
+  is made. The cap is therefore a stopping point, not a hard ceiling. The
+  first call is never refused, so a run always gets at least one. The caps
+  are read from the environment when a run starts, and `GET /runs/limits`
+  returns them so the page can show each meter against its limit.
+- **The registry numbers the events.** `api/live.py` holds each run's events
+  in a list and assigns `seq` itself, from 1, under one lock. Producers
+  don't pick numbers, so no two events can share one, and a client can say
+  "everything after N". A run is `running` until its `done` or `failed` is
+  stored; after that it takes no more events. Finished runs are evicted after
+  `LIVE_TTL_SECONDS` (900), which is how a page reload can still replay a
+  just-finished run. Running ones are never evicted. At most
+  `LIVE_MAX_CONCURRENT` (2) runs may be running at once; the next
+  `POST /runs` gets a 429. Readers get copies, so a stream can't see the
+  worker mutate what it is serialising.
+- **Why in memory.** A run lasts under a few minutes and its record of
+  record is the `calls` table, which already holds the cost. The registry is
+  only a replay buffer for one browser. A table of events would add a
+  migration and a write per event to protect something that is cheap to rerun.
+- **Routes.** `GET /runs/{id}/events` is the stream. `GET /runs/{id}` is a
+  snapshot: status, last `seq`, and the result or the failure. It's what a
+  page uses to learn that a run is already over. Both 404 for an unknown or
+  expired run. `/runs/limits` is declared first so "limits" isn't read as a
+  run id.
+- **The run outlives the connection.** The run is an `asyncio` task the
+  server owns and keeps a reference to, started by the POST and not by the
+  stream. Closing the tab, losing wifi or navigating away drops a reader and
+  nothing else. This was a decision, not a default: the alternative, cancelling
+  when the client disconnects, would make a flaky connection waste every
+  call already paid for, and would make "reopen the page and see the
+  answer" impossible. The cost of the choice is that an abandoned tab's run
+  still spends up to its budget; the four limits are what bound that. The
+  worker is also built so that whatever happens, the run ends with one `done`
+  or `failed`. A crash, a cancellation or a loop that returns without a final
+  event gets a `failed` appended on its behalf, so a stream is never left
+  waiting for an ending that won't come.
+- **Accounting is the same as section 4.** After the run, one `calls` row per
+  turn, sharing the `run_id`, with `endpoint` `/runs`. A run that dies before
+  its first model call records a single error row. A failure of the
+  accounting itself is logged and does not undo the finished run.
+- **Reconnect is a protocol feature, not page code.** Each SSE message
+  carries its `seq` as the event id, so the browser's `EventSource` resends
+  the last one as `Last-Event-ID` after a drop and the server replays what
+  followed. A first connection can pass `?after=N` instead; the header wins
+  when both are present. The stream sends a keep-alive comment after
+  `LIVE_KEEPALIVE_SECONDS` (15) of silence, so a proxy doesn't close an idle
+  connection while the model is thinking, and ends itself after the terminal
+  event.
+- **The page trusts order, not arrival.** `web/src/liveRun.ts` is a pure
+  reducer. It applies an event only when its `seq` is exactly one past the last
+  one applied, parks later ones until the gap fills, and drops anything
+  already applied. A reconnect that replays events, or a duplicate, can't
+  double-count a tool call or a total. The reducer is tested with Vitest,
+  because this is the logic a flaky network would otherwise exercise for the
+  first time in front of the user. The run id is kept in `localStorage`; on
+  load the page asks `GET /runs/{id}` and, if the run is still known, resumes
+  or shows it. A blocked `localStorage` only costs the reopen.
+
+**Stated limits.**
+
+- **A restart drops in-progress runs, and their `calls` rows.** The registry
+  is process memory, and the rows are written when a run ends, as with
+  `/triage/agent`. A restart or kill mid-run loses the events and the cost of
+  the calls so far. A run that finishes before the restart is unaffected in
+  `calls`, though its replay is gone.
+- **One process.** The registry isn't shared, so a second worker would 404 on
+  runs it didn't start. Run one uvicorn worker.
+- **Open streams hold threadpool threads.** Waiting for the next event
+  blocks on a condition variable in a worker thread, so each open stream
+  occupies one. With one user and at most two concurrent runs that is fine; it
+  would not be for a public deployment.
+- **No auth.** Anyone who can reach the API can start a run, within the
+  concurrency limit. CORS is the only gate, and it isn't one for non-browsers.
 
 ---
 
@@ -360,6 +477,6 @@ migration.
 
 | Phase | Attaches at |
 |---|---|
-| 05 Agent loop | budgets wrap `agent.loop.run`: turns already have a limit, and token, time and dollar limits can read the per-turn `Turn` accounting that feeds `calls`. SSE streams from the per-turn loop. The A/B is `eval/agent.py`, scored with the same `score_ranking` as retrieval |
-| 06 Workflow | each stage gets a typed output in the style of `TriageResult` |
-| 07 Production | cache columns in `calls`, nightly `eval.retrieve`, the test split, the second corpus as a held-out generalization check |
+| 05 Agent loop | done: the A/B (`eval/ablation.py`), budgets and the live run (section 8) |
+| 06 Workflow | each stage gets a typed output in the style of `TriageResult`; a stage can emit through the same `on_event` seam and `LiveEvent` union, so the trace panel gains stages without a new transport |
+| 07 Production | cache columns in `calls`, nightly `eval.retrieve`, the test split, the second corpus as a held-out generalization check. Also where the live run's limits get revisited: a shared registry (or an events table) for more than one process, and auth |
