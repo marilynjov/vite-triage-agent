@@ -725,8 +725,11 @@ Command: `PROVIDER=anthropic python -m eval.ablation --arms staged --n 40 --repe
 then `python -m eval.ablation --report data/runs/val-n40-r3.jsonl`.
 
 **A first attempt was discarded.** Its first 57 runs (out of a planned 120)
-had 23 run errors; 16 of them came from locate's boundary check, which rejected the
+had 23 run errors; 14 of them came from locate's boundary check, which rejected the
 whole answer when any one named file was out of scope (a test file, a `.d.ts`).
+Four more were understand's contract (2 regions in files locate had not named,
+2 answers over the 6-region cap), so 18 of the 23 were our checks; the other 5
+were budget or turn stops.
 That measured our contract, not localization, so the run was stopped. The
 checks now drop out-of-scope files and regions in files locate did not name,
 record what they dropped, and fail only when nothing is left. The 57 records
@@ -760,8 +763,8 @@ difference (`agent` against `grounded` on the same rows: +0.099, [+0.027, +0.187
 | staged | 0.0113 | 0.0239 | 33606 | 45148 | 11 |
 
 `staged` costs about 4 times `agent` per triage and about 5 times per correct
-answer, and takes about 5 times as long at the median. Mean cost by stage:
-locate $0.0060, understand $0.0043, hypothesize $0.0013. Tool calls: read_file 522,
+answer, and takes about 5 times as long at the median. Mean cost per run that
+reached the stage: locate $0.0060, understand $0.0043, hypothesize $0.0013. Tool calls: read_file 522,
 grep 334, list_dir 10, git_log 6; mean 8.2 turns per run.
 
 **Where runs are lost (share of runs; mean over 2 repeats, min–max).**
@@ -779,25 +782,33 @@ By stage, miss plus error (clean): **understand 0.258**, locate 0.167,
 hypothesize 0.136. The single largest outcome is `locate_miss`; the largest
 stage is understand, because half of what it loses is errors.
 
-The 11 run errors across all 80 runs: understand ran out of the pipeline's
-token budget 5 times and out of its 6 turns 5 times without giving an answer;
+The 11 run errors across all 80 runs: understand ran out of its 6 turns 5
+times and out of the pipeline's 150k-token budget 5 times without giving an
+answer. In those 5 token stops locate had already used 85k–130k of the 150k
+(understand started with 19.9k–65.4k left), so half of understand's budget
+stops are locate's spend;
 locate ran out of its 8 turns once. The pruning checks dropped files from
-locate's answer in 15 runs and regions from understand's in 5.
+locate's answer in 15 runs and regions from understand's in 5 (2 of those 5
+were cuts over the 6-region cap).
 
 20 clean runs (10 issues) were judged at file level only, because none of their
 fix lines survive at the pin. Among hits whose fault could be judged, the fault
 overlapped a gold region in 0.550 of them (clean).
 
-**Gate.** *Understand fails most: 25.8% of clean runs are lost there (12.1% that
-read the right file but named no gold region, 13.6% that ended with no answer),
-against 16.7% at locate and 13.6% at hypothesize. Fix first: understand's
-budget exhaustion. Ten of the 80 runs ended inside understand by running out of
-turns or tokens, before it named any region.* Interpretation, not measured
-here: understand reads with read_file in chunks of up to 400 lines over files that can
-run to thousands of lines, so a stage that is asked to name line regions spends
-its turns and tokens reading. The cheapest next measurement is to let it read
-around locate's evidence first, or to give it more turns, and see whether
-`error:understand` falls without `understand_miss` rising.
+**Gate.** *Understand fails most: 25.8% of clean runs are lost there (12.1% where
+locate had named a gold file but understand named no gold region, 13.6% that
+ended with no answer), against 16.7% at locate and 13.6% at hypothesize. In
+each repeat on its own, understand (0.273, 0.242) is above locate (0.182,
+0.152).* That much is measured.
+
+What to fix first is a reading of the 10 understand errors, not a measured
+result: give each stage its own share of the token budget (or cap locate's), so
+locate cannot spend what understand needs, and give understand more than 6
+turns. Five of the ten were turn stops and five were token stops after locate's
+spend; neither change alone addresses both. The test is whether
+`error:understand` falls without `understand_miss` rising. Also unmeasured:
+understand reads with read_file in chunks of up to 400 lines over files that
+can run to thousands of lines, which is where its turns and tokens go.
 
 **Verdict on the structure.** On these 40 rows the staged pipeline is no better
 than the single agent at recall@1 (clean -0.014, interval [-0.106, +0.080]) and
