@@ -45,6 +45,13 @@ GROUNDED_K = int(os.getenv("GROUNDED_K", "10"))
 
 # Runaway guard for the tool-use loop: the most API calls one triage may make.
 AGENT_MAX_TURNS = int(os.getenv("AGENT_MAX_TURNS", "12"))
+# The other three limits of the same guard, checked before every call after the first.
+# Input plus output tokens summed over the run.
+AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "150000"))
+# Wall-clock seconds since the run started.
+AGENT_MAX_SECONDS = float(os.getenv("AGENT_MAX_SECONDS", "180"))
+# Dollars spent so far in the run.
+AGENT_MAX_DOLLARS = float(os.getenv("AGENT_MAX_DOLLARS", "0.05"))
 
 SCHEMA_SQL = Path(__file__).resolve().parent / "schema.sql"
 
