@@ -215,3 +215,64 @@ def test_main_no_warning_without_duplicates(tmp_path, capsys):
     p.write_text(json.dumps(rec(issue=1)) + "\n")
     R.main(p)
     assert "WARNING" not in capsys.readouterr().out
+
+
+# --- staged outcomes --------------------------------------------------------
+
+def srec(issue, outcome, repeat=0, gold=False, fault=None, fl=False, kind=None, **kw):
+    r = rec("staged", issue=issue, repeat=repeat, gold=gold, kind=kind, **kw)
+    r.update({"outcome": outcome, "fault_hit": fault, "file_level_only": fl,
+              "failed_stage": None, "stages": {}, "stage_costs": {}})
+    return r
+
+
+def _staged_set():
+    return [srec(1, "hit", 0, fault=True), srec(2, "locate_miss", 0),
+            srec(1, "hit", 1, fault=False), srec(2, "hypothesize_miss", 1),
+            srec(3, "hit", 0, gold=True)]
+
+
+def test_outcome_table_shares_and_spread():
+    t = R.outcome_table(_staged_set())
+    assert t["hit"] == pytest.approx((0.5, 0.5, 0.5))
+    assert t["locate_miss"] == pytest.approx((0.25, 0.0, 0.5))
+    assert t["hypothesize_miss"] == pytest.approx((0.25, 0.0, 0.5))
+    assert sum(v[0] for v in t.values()) == pytest.approx(1.0)
+    assert R.outcome_table(_staged_set(), subset="all")["hit"][0] == pytest.approx((2 / 3 + 0.5) / 2)
+    assert R.outcome_table([rec()]) == {}
+
+
+def test_fails_most_picks_the_largest_miss():
+    recs = _staged_set() + [srec(4, "error:locate", 0), srec(5, "error:locate", 1),
+                            srec(6, "hit", 0), srec(7, "hit", 1)]
+    assert R.fails_most(recs) == "error:locate"
+    assert R.fails_most([srec(1, "hit")]) == "n/a"
+    assert R.fails_most([]) == "n/a"
+
+
+def test_report_survives_mixed_records():
+    old = [rec("grounded", i, r, r1=1.0) for i in range(3) for r in range(2)]
+    old += [rec("agent", i, r, r1=1.0, calls=[]) for i in range(3) for r in range(2)]
+    text = R.markdown(old + _staged_set())
+    assert "Fails most (clean): locate_miss" in text or "Fails most (clean): hypothesize_miss" in text
+    assert "Rows judged at file level only (clean): 0" in text
+    assert "Fault hit rate among judged hits (clean): 0.500" in text
+    assert "Chosen arm" in text
+    assert R.markdown(old)  # no staged records at all
+
+
+def test_file_level_only_count_and_api_records_excluded():
+    recs = [srec(1, "hit", fl=True), srec(2, "hit", fl=False),
+            srec(3, None, kind="api")]
+    text = R.markdown(recs)
+    assert "Rows judged at file level only (clean): 1" in text
+    assert R.outcome_table(recs)["hit"][0] == 1.0
+
+
+def test_staged_against_agent_line():
+    recs = [rec("agent", i, 0, r1=0.0) for i in range(4)]
+    recs += [srec(i, "hit", 0, r1=1.0) for i in range(4)]
+    text = R.markdown(recs)
+    assert "Staged against agent (clean" in text
+    assert "| agent -> staged | 4 | 4 | 0 | 0 | +1.000 |" in text
+    assert "| grounded -> staged |" in text

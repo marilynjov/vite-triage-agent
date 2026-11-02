@@ -27,7 +27,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .ablation import load_records
-from .arms import MODEL_ARMS
+from .arms import MODEL_ARMS, PIPELINE_ARMS
 
 METRICS = ("recall_at_1", "recall_at_5", "rr")
 RETRIEVAL = "retrieval"
@@ -35,6 +35,8 @@ BASELINE = MODEL_ARMS[0]
 AGENT_ARMS = tuple(a for a in MODEL_ARMS if a != BASELINE)
 CHAIN = tuple(zip(MODEL_ARMS, MODEL_ARMS[1:]))
 EPS = 1e-12
+STAGED = PIPELINE_ARMS[0]
+OUTCOME_ORDER = ("hit", "hypothesize_miss", "understand_miss", "locate_miss")
 
 
 def _use(records, arm, subset=None):
@@ -165,13 +167,56 @@ def choose_arm(records):
     return best
 
 
+def _outcome_rows(records, arm, subset):
+    return [r for r in _use(records, arm, subset) if r.get("outcome")]
+
+
+def outcome_table(records, arm=STAGED, subset="clean"):
+    """outcome -> (mean share over repeats, min, max); {} without staged records.
+
+    Rows are the arm's non-api records with an outcome (older records lack the key).
+    A repeat in which an outcome never occurs counts as share 0."""
+    recs = _outcome_rows(records, arm, subset)
+    if not recs:
+        return {}
+    by_rep = defaultdict(list)
+    for r in recs:
+        by_rep[r["repeat"]].append(r["outcome"])
+    seen = {r["outcome"] for r in recs}
+    names = [o for o in OUTCOME_ORDER if o in seen] + sorted(seen - set(OUTCOME_ORDER))
+    out = {}
+    for o in names:
+        shares = [v.count(o) / len(v) for v in by_rep.values()]
+        out[o] = (sum(shares) / len(shares), min(shares), max(shares))
+    return out
+
+
+def fails_most(records, arm=STAGED):
+    """The non-hit outcome with the largest clean mean share, or 'n/a'."""
+    misses = {o: v[0] for o, v in outcome_table(records, arm, "clean").items() if o != "hit"}
+    if not misses:
+        return "n/a"
+    return max(misses, key=lambda o: (misses[o], -list(misses).index(o)))
+
+
+def file_level_only_count(records, arm=STAGED, subset="clean"):
+    return sum(bool(r.get("file_level_only")) for r in _outcome_rows(records, arm, subset))
+
+
+def fault_hit_rate(records, arm=STAGED, subset="clean"):
+    """Share of fault_hit True among hits that were judged (None excluded), or None."""
+    judged = [r["fault_hit"] for r in _outcome_rows(records, arm, subset)
+              if r["outcome"] == "hit" and r.get("fault_hit") is not None]
+    return sum(judged) / len(judged) if judged else None
+
+
 def _f(x, spec=".3f"):
     return "n/a" if x is None else format(x, spec)
 
 
 def markdown(records) -> str:
     arms = [BASELINE, *AGENT_ARMS]
-    scored = [RETRIEVAL, *arms]
+    scored = [RETRIEVAL, *arms, *PIPELINE_ARMS]
     L = []
     L += ["## Scores (mean over repeats; min-max across repeats)", "",
           "| arm | subset | runs | recall@1 | recall@5 | MRR | flip rate |",
@@ -188,7 +233,8 @@ def markdown(records) -> str:
                      + f" | {_f(flip_rate(records, arm, sub))} |")
     for title, pairs in (("Chain: each arm against the one before it", CHAIN),
                          ("Each agent arm against grounded",
-                          [(BASELINE, x) for x in AGENT_ARMS]),
+                          [(BASELINE, x) for x in (*AGENT_ARMS, *PIPELINE_ARMS)]),
+                         ("Staged against agent", [("agent", STAGED)]),
                          ("Each model arm against retrieval",
                           [(RETRIEVAL, x) for x in arms])):
         for sub in ("clean", "all"):
@@ -219,7 +265,7 @@ def markdown(records) -> str:
     L += ["", "## Tool use", "",
           "| arm | used any | turns mean/p50/max | calls by tool | tool error rate | picks seen |",
           "|---|---|---|---|---|---|"]
-    for arm in AGENT_ARMS:
+    for arm in (*AGENT_ARMS, *PIPELINE_ARMS):
         t = tool_stats(records, arm)
         if not t:
             L.append(f"| {arm} | no data | | | | |")
@@ -228,6 +274,18 @@ def markdown(records) -> str:
         L.append(f"| {arm} | {t['used_any']:.2f} | {t['turns_mean']:.1f}/"
                  f"{t['turns_p50']:g}/{t['turns_max']} | {calls} | "
                  f"{_f(t['tool_error_rate'], '.2f')} | {_f(t['picks_seen'], '.2f')} |")
+    L += ["", "## Staged outcomes (share of runs; mean over repeats, min-max across repeats)"]
+    for sub in ("clean", "all"):
+        t = outcome_table(records, STAGED, sub)
+        L += ["", f"### {sub}", ""]
+        if not t:
+            L.append("no data")
+            continue
+        L += ["| outcome | share |", "|---|---|"]
+        L += [f"| {o} | {m:.3f} ({lo:.3f}-{hi:.3f}) |" for o, (m, lo, hi) in t.items()]
+    L += ["", f"Fails most (clean): {fails_most(records)}",
+          f"Rows judged at file level only (clean): {file_level_only_count(records)}",
+          f"Fault hit rate among judged hits (clean): {_f(fault_hit_rate(records))}"]
     L += ["", f"**Chosen arm: {choose_arm(records)}**"]
     return "\n".join(L)
 
