@@ -283,7 +283,7 @@ from agent.pipeline import PipelineError, PipelineRun  # noqa: E402
 from api.schema import LocateResult, LocatedFile, Region, UnderstandResult  # noqa: E402
 
 STAGED_KEYS = FIELDS | {"stages", "stage_costs", "failed_stage", "outcome", "fault_hit",
-                        "file_level_only"}
+                        "file_level_only", "dropped"}
 REGIONS = {7: {"b": [[10, 20]]}}
 
 

@@ -94,11 +94,18 @@ class LocatedFile(BaseModel):
     evidence: str
 
 
+# These caps are not validated: a result over the cap is truncated by the stage check, which
+# records what it cut. They stay in the JSON schema (maxItems, which the SDK turns into a
+# description) so the model is still told.
+LOCATE_MAX_FILES = 5
+UNDERSTAND_MAX_REGIONS = 6
+
+
 class LocateResult(BaseModel):
     model_config = {"extra": "forbid"}
 
     reasoning: str
-    files: list[LocatedFile] = Field(min_length=1, max_length=5)
+    files: list[LocatedFile] = Field(min_length=1, json_schema_extra={"maxItems": LOCATE_MAX_FILES})
 
 
 class Region(BaseModel):
@@ -118,7 +125,8 @@ class UnderstandResult(BaseModel):
     model_config = {"extra": "forbid"}
 
     reasoning: str
-    regions: list[Region] = Field(min_length=1, max_length=6)
+    regions: list[Region] = Field(min_length=1,
+                                  json_schema_extra={"maxItems": UNDERSTAND_MAX_REGIONS})
 
 
 class Fault(BaseModel):

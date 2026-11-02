@@ -23,6 +23,7 @@ class PipelineRun:
     failed_stage: str | None = None
     error: str | None = None
     seconds: float = 0.0
+    dropped: dict[str, list[str]] = field(default_factory=dict)  # stage -> what a check cut
 
     @property
     def result(self) -> HypothesisResult | None:
@@ -107,11 +108,13 @@ def run_pipeline(title: str, body: str, candidates: list[FileHit], cutoff: str, 
             pr.seconds += loop._now() - t0
 
     r = call("locate", system=stages.LOCATE_SYSTEM, tool_specs=stages.LOCATE_TOOLS,
-             output_model=LocateResult, check=stages.check_locate())
+             output_model=LocateResult, check=stages.check_locate(
+                 pr.dropped.setdefault("locate", [])))
     pr.runs["locate"], pr.locate = r, r.result
 
     r = call("understand", system=stages.UNDERSTAND_SYSTEM, tool_specs=stages.UNDERSTAND_TOOLS,
-             output_model=UnderstandResult, check=stages.check_understand(pr.locate),
+             output_model=UnderstandResult, check=stages.check_understand(
+                 pr.locate, pr.dropped.setdefault("understand", [])),
              prompt=stages.understand_prompt(title, body, pr.locate))
     pr.runs["understand"], pr.understand = r, r.result
 

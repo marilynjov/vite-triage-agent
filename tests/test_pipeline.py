@@ -110,6 +110,79 @@ def test_understand_run_error_is_attributed():
     assert len(e.run.turns) == 2 and e.run.stage_costs["understand"] > 0
 
 
+OTHER = "packages/vite/src/node/config.ts"
+TESTFILE = "packages/vite/src/node/__tests__/build.spec.ts"
+
+
+def _files(*paths):
+    return S.LocateResult(reasoning="r", files=[
+        S.LocatedFile(path=p, why="w", evidence="e") for p in paths])
+
+
+def _regions(*specs):
+    return S.UnderstandResult(reasoning="r", regions=[S.Region(
+        path=p, symbol=None, start_line=a, end_line=b, what_it_does="d", relevance="r")
+        for p, a, b in specs])
+
+
+def test_locate_test_file_is_pruned_and_recorded_and_the_run_succeeds():
+    c = FakeClient(_resp(_files(TESTFILE, CSS)), _resp(_und()), _resp(_hyp()))
+    pr = _go(c)
+    assert [f.path for f in pr.locate.files] == [CSS]
+    assert pr.dropped == {"locate": [TESTFILE], "understand": []}
+    # the next stage was shown the pruned result only
+    assert TESTFILE not in _first_user(c.calls[1]) and TESTFILE not in _first_user(c.calls[2])
+
+
+def test_run_result_is_the_pruned_object_and_done_event_dumps_after_the_check():
+    events, c = [], FakeClient(_resp(_files(TESTFILE, CSS)))
+    from agent import stages as st
+    dropped = []
+    r = loop.run("t", "b", [_hit()], CUTOFF, budget=BIG, client=c, output_model=S.LocateResult,
+                 check=st.check_locate(dropped), on_event=events.append)
+    assert [f.path for f in r.result.files] == [CSS] and dropped == [TESTFILE]
+    done = next(e for e in events if e["type"] == "done")
+    assert [f["path"] for f in done["result"]["files"]] == [CSS]
+
+
+def test_locate_with_nothing_in_scope_is_a_locate_pipeline_error():
+    c = FakeClient(_resp(_files(TESTFILE, "packages/vite/types/hot.d.ts")))
+    with pytest.raises(pipeline.PipelineError) as ei:
+        _go(c)
+    assert ei.value.stage == "locate"
+    assert "no located file is in scope at the pinned tree" in str(ei.value)
+    assert ei.value.run.dropped["locate"] == [TESTFILE, "packages/vite/types/hot.d.ts"]
+
+
+def test_understand_region_in_unlocated_file_is_dropped_and_recorded():
+    c = FakeClient(_resp(_loc()), _resp(_regions((OTHER, 3, 7), (CSS, 1, 10))), _resp(_hyp()))
+    pr = _go(c)
+    assert [r.path for r in pr.understand.regions] == [CSS]
+    assert pr.dropped["understand"] == [OTHER + ":3-7"]
+
+
+def test_seven_regions_are_truncated_to_six_and_recorded():
+    c = FakeClient(_resp(_loc()),
+                   _resp(_regions(*[(CSS, i, i + 1) for i in range(1, 8)])), _resp(_hyp()))
+    pr = _go(c)
+    assert len(pr.understand.regions) == 6 and pr.dropped["understand"] == ["+1 over cap"]
+
+
+def test_six_located_files_are_truncated_to_five():
+    six = [CSS, OTHER] + [f"packages/vite/src/node/{n}.ts" for n in
+                          ("build", "server/index", "plugins/index", "utils")]
+    c = FakeClient(_resp(_files(*six)), _resp(_und()), _resp(_hyp()))
+    pr = _go(c)
+    assert len(pr.locate.files) == 5 and pr.dropped["locate"] == ["+1 over cap"]
+
+
+def test_out_of_bounds_region_still_rejects_the_run():
+    c = FakeClient(_resp(_loc()), _resp(_regions((CSS, 1, 10**7))))
+    with pytest.raises(pipeline.PipelineError) as ei:
+        _go(c)
+    assert ei.value.stage == "understand" and "outside" in str(ei.value)
+
+
 def test_pipeline_run_duck_types_run():
     pr = _go(FakeClient(_resp(_loc()), _resp(_und()), _resp(_hyp())))
     assert len(pr.turns) == sum(len(r.turns) for r in pr.runs.values()) == 3

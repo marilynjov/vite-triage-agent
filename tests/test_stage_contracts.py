@@ -39,12 +39,10 @@ def test_models_validate_and_forbid_extra():
         S.LocatedFile(path="a", why="w", evidence="e", extra=1)
     with pytest.raises(ValidationError):
         S.LocateResult(reasoning="r", files=[])
-    with pytest.raises(ValidationError):
-        _loc(*[f"f{i}" for i in range(6)])
+    assert len(_loc(*[f"f{i}" for i in range(6)]).files) == 6  # capped by the check, not here
     with pytest.raises(ValidationError):
         S.UnderstandResult(reasoning="r", regions=[])
-    with pytest.raises(ValidationError):
-        _und(*[_region() for _ in range(7)])
+    assert len(_und(*[_region() for _ in range(7)]).regions) == 7
     with pytest.raises(ValidationError):
         S.Fault(path="a", start_line=1, end_line=2, mechanism="m", extra=1)
     assert issubclass(S.HypothesisResult, S.GroundedTriageResult)
@@ -54,18 +52,53 @@ def test_locate_accepts_in_scope_files_outside_candidates():
     stages.check_locate()(_loc(CSS, OTHER))
 
 
-def test_locate_rejects_missing_or_out_of_scope_path():
-    for bad in ("packages/vite/src/node/nope.ts",
-                "packages/vite/src/node/__tests__/build.spec.ts"):
-        with pytest.raises(ValueError, match="^locate: "):
-            stages.check_locate()(_loc(CSS, bad))
+TESTFILE = "packages/vite/src/node/__tests__/build.spec.ts"
+MISSING = "packages/vite/src/node/nope.ts"
 
 
-def test_understand_rejects_region_outside_located_files():
-    check = stages.check_understand(_loc(CSS))
-    check(_und(_region()))
+def test_locate_prunes_missing_or_out_of_scope_paths_and_records_them():
+    for bad in (MISSING, TESTFILE, "packages/vite/types/hot.d.ts"):
+        res, dropped = _loc(CSS, bad), []
+        stages.check_locate(dropped)(res)
+        assert [f.path for f in res.files] == [CSS] and dropped == [bad]
+
+
+def test_locate_fails_only_when_nothing_is_in_scope():
+    with pytest.raises(ValueError, match="^locate: no located file is in scope"):
+        stages.check_locate()(_loc(MISSING, TESTFILE))
+
+
+def test_locate_truncates_to_five_and_records():
+    paths = [CSS, OTHER] + [f"packages/vite/src/node/{n}.ts" for n in
+                            ("build", "server/index", "plugins/index", "utils")]
+    res, dropped = _loc(*paths), []
+    stages.check_locate(dropped)(res)
+    assert [f.path for f in res.files] == paths[:5] and dropped == ["+1 over cap"]
+
+
+def test_understand_drops_regions_in_unlocated_files_and_records_them():
+    res, dropped = _und(_region(path=OTHER, start=3, end=7), _region()), []
+    stages.check_understand(_loc(CSS), dropped)(res)
+    assert [r.path for r in res.regions] == [CSS] and dropped == [f"{OTHER}:3-7"]
+
+
+def test_understand_fails_when_no_region_is_in_a_located_file():
     with pytest.raises(ValueError, match="^understand: "):
-        check(_und(_region(path=OTHER)))
+        stages.check_understand(_loc(CSS))(_und(_region(path=OTHER)))
+
+
+def test_understand_truncates_to_six_and_records():
+    res, dropped = _und(*[_region(start=i, end=i + 1) for i in range(1, 8)]), []
+    stages.check_understand(_loc(CSS), dropped)(res)
+    assert len(res.regions) == 6 and dropped == ["+1 over cap"]
+
+
+def test_caps_stay_in_the_schema_sent_to_the_model():
+    import anthropic
+    loc = anthropic.transform_schema(S.LocateResult)["properties"]["files"]
+    und = anthropic.transform_schema(S.UnderstandResult)["properties"]["regions"]
+    assert "maxItems: 5" in loc["description"] and "maxItems: 6" in und["description"]
+    assert loc["minItems"] == und["minItems"] == 1
 
 
 def test_understand_rejects_out_of_bounds_lines():

@@ -9,7 +9,8 @@ from collections.abc import Callable
 
 import mining.config as M
 from agent import tools
-from api.schema import HypothesisResult, LocateResult, UnderstandResult
+from api.schema import (LOCATE_MAX_FILES, UNDERSTAND_MAX_REGIONS, HypothesisResult,
+                        LocateResult, UnderstandResult)
 from api.triage import STRUCTURED_SYSTEM
 
 
@@ -18,27 +19,53 @@ def _lines_ok(path: str, start: int, end: int) -> bool:
     return n is not None and 1 <= start <= end <= n
 
 
-def check_locate() -> Callable[[LocateResult], None]:
+def _cap(items: list, cap: int, dropped: list[str] | None) -> list:
+    """The first `cap` items; what is cut is recorded as the labels plus a marker."""
+    if len(items) <= cap:
+        return items
+    if dropped is not None:
+        dropped.append(f"+{len(items) - cap} over cap")
+    return items[:cap]
+
+
+def check_locate(dropped: list[str] | None = None) -> Callable[[LocateResult], None]:
+    """Prune files absent at the pin or out of scope (recorded in `dropped`); fail only if
+    none remain. Mutates the result, which is what the loop then keeps."""
     def check(result: LocateResult) -> None:
         tracked = tools._tracked()
-        bad = [f.path for f in result.files
-               if f.path not in tracked or not M.is_gold_candidate(f.path)]
-        if bad:
-            raise ValueError(f"locate: files not in scope at the pinned tree: {', '.join(bad)}")
+        keep = []
+        for f in result.files:
+            if f.path in tracked and M.is_gold_candidate(f.path):
+                keep.append(f)
+            elif dropped is not None:
+                dropped.append(f.path)
+        if not keep:
+            raise ValueError("locate: no located file is in scope at the pinned tree: "
+                             + ", ".join(f.path for f in result.files))
+        result.files = _cap(keep, LOCATE_MAX_FILES, dropped)
     return check
 
 
-def check_understand(located: LocateResult) -> Callable[[UnderstandResult], None]:
+def check_understand(located: LocateResult,
+                     dropped: list[str] | None = None) -> Callable[[UnderstandResult], None]:
     allowed = {f.path for f in located.files}
 
     def check(result: UnderstandResult) -> None:
+        keep = []
         for r in result.regions:
-            if r.path not in allowed:
-                raise ValueError(f"understand: region file {r.path} was not located")
+            if r.path in allowed:
+                keep.append(r)
+            elif dropped is not None:
+                dropped.append(f"{r.path}:{r.start_line}-{r.end_line}")
+        keep = _cap(keep, UNDERSTAND_MAX_REGIONS, dropped)
+        for r in keep:
             if not _lines_ok(r.path, r.start_line, r.end_line):
                 raise ValueError(
                     f"understand: lines {r.start_line}-{r.end_line} outside {r.path} "
                     f"(1-{tools.file_length(r.path)})")
+        if not keep:
+            raise ValueError("understand: no region is in a located file")
+        result.regions = keep
     return check
 
 

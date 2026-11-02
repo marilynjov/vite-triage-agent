@@ -90,6 +90,7 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
     pipeline = arm.kind == "pipeline"
     stages: dict = {"locate": None, "understand": None, "hypothesis": None}
     stage_costs: dict = {}
+    dropped: dict = {}
     failed_stage = None
     infra = False
     started = time.perf_counter()
@@ -99,6 +100,7 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
             picked = list(r.result.suspected_files)
             turns, trace, cost = r.turns, r.trace, float(r.cost_usd)
             stages, stage_costs = _stages(r), dict(r.stage_costs)
+            dropped = {k: list(v) for k, v in r.dropped.items() if v}
         elif arm.system is None:
             picked = list(paths)
         else:
@@ -117,6 +119,7 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
         if pipeline:
             failed_stage = None if infra else getattr(exc, "stage", None)
             stages, stage_costs = _stages(exc.run), dict(exc.run.stage_costs)
+            dropped = {k: list(v) for k, v in exc.run.dropped.items() if v}
     except Exception as exc:  # infrastructure, not the arm's fault
         error, error_kind = f"{type(exc).__name__}: {exc}", "api"
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -143,6 +146,7 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
                                        gold_regions)
         rec.update({
             "stages": stages, "stage_costs": stage_costs, "failed_stage": failed_stage,
+            "dropped": dropped,
             "outcome": out, "fault_hit": fault_hit,
             # stored so the report stays pure: every gold file is judged at file level only
             "file_level_only": all(not gold_regions.get(g) for g in row["gold_files"]),
