@@ -16,6 +16,7 @@ from api.main import app, format_sse
 from retrieval.search import FileHit, Hit
 
 BODY = {"title": "Less @import fails", "body": "details"}
+MAX_POLLS = 25
 TOTALS = {"turns": 1, "tokens": 5, "cost_usd": 0.001, "seconds": 0.1}
 
 
@@ -82,6 +83,22 @@ def env(monkeypatch):
         return fake
 
     set_run()
+
+    # TestClient buffers a whole response, so a stream that never ends would hang
+    # the test. Bound it instead: a stream still polling after MAX_POLLS waits
+    # (~5s at the patched keep-alive) raises, which fails the test rather than
+    # stalling the suite.
+    reg, polls = live.registry, {"n": 0}
+    real_wait = reg.wait_after
+
+    def bounded_wait(run_id, seq, timeout):
+        polls["n"] += 1
+        if polls["n"] > MAX_POLLS:
+            raise AssertionError("stream did not end: still polling after "
+                                 f"{MAX_POLLS} waits")
+        return real_wait(run_id, seq, timeout)
+
+    monkeypatch.setattr(reg, "wait_after", bounded_wait)
     # a context manager keeps one event loop alive, so the server-owned task survives
     with TestClient(app) as client:
         yield client, calls, set_run
@@ -283,6 +300,44 @@ def test_retrieval_failure_emits_failed_api_and_records_one_row(env, monkeypatch
     while not calls and time.monotonic() < deadline:
         time.sleep(0.02)
     assert len(calls) == 1 and calls[0]["error"] and calls[0]["run_id"] == rid
+
+
+def _wait_calls(calls, n):
+    deadline = time.monotonic() + 5
+    while len(calls) < n and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+def test_fallback_failed_is_recorded_on_the_rows(env):
+    client, calls, set_run = env
+    set_run(_script()[:2])  # returns with a turn paid for, but no terminal event
+    stream(client, start(client))
+    _wait_calls(calls, 1)
+    assert [c["error"] for c in calls] == ["run ended without a final event"]
+
+
+def test_crash_is_logged_and_recorded(env, caplog):
+    client, calls, set_run = env
+    set_run(_script()[:2], exc=ValueError("kaboom"), run=None)
+    stream(client, start(client))
+    _wait_calls(calls, 1)
+    assert calls and calls[0]["error"] == "kaboom"
+    assert "crashed" in caplog.text
+
+
+def test_recording_failure_is_logged_not_raised(env, monkeypatch, caplog):
+    client, _, _ = env
+
+    async def broken(**kw):
+        raise RuntimeError("db gone")
+    monkeypatch.setattr("api.main.db.record_call", broken)
+    rid = start(client)
+    stream(client, rid)
+    deadline = time.monotonic() + 5
+    while "recording calls rows" not in caplog.text and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert "recording calls rows" in caplog.text
+    assert client.get(f"/runs/{rid}").json()["status"] == "done"
 
 
 def test_loop_returning_without_terminal_event_still_ends_failed(env):

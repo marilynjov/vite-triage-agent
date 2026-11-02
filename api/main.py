@@ -8,6 +8,7 @@ from dataclasses import asdict
 from decimal import Decimal
 import asyncio
 import json
+import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -401,6 +402,7 @@ async def recent_calls(limit: int = 20) -> list[dict]:
 
 # ---- Phase 05 B+C: live runs ------------------------------------------------
 
+log = logging.getLogger(__name__)
 _tasks: set[asyncio.Task] = set()  # belt and braces: a task must never be GC'd mid-run
 
 
@@ -416,7 +418,7 @@ def _totals_of(run) -> dict:
             "seconds": 0.0}
 
 
-def _append_failed(run_id: str, exc: BaseException | None, run, started: float) -> None:
+def _append_failed(run_id: str, exc: BaseException | None, run, started: float) -> str:
     """Store the failed event the loop could not (or did not) leave behind."""
     totals = _totals_of(run)
     totals["seconds"] = round(time.perf_counter() - started, 3)
@@ -434,6 +436,7 @@ def _append_failed(run_id: str, exc: BaseException | None, run, started: float) 
         live.registry.append(run_id, event)
     except (KeyError, ValueError):
         pass  # evicted, or a terminal event landed meanwhile
+    return event["message"]
 
 
 def _is_running(run_id: str) -> bool:
@@ -446,7 +449,6 @@ async def _execute(run_id: str, request: AgentTriageRequest, cutoff: str) -> Non
     started = time.perf_counter()
     run = None
     exc: BaseException | None = None
-    loop_started = False
     try:
         candidates = await run_in_threadpool(
             search.search_ranked, f"{request.title}\n\n{request.body}",
@@ -460,7 +462,6 @@ async def _execute(run_id: str, request: AgentTriageRequest, cutoff: str) -> Non
                             "start_line": f.best.start_line, "end_line": f.best.end_line}
                            for f in candidates],
         })
-        loop_started = True
         run = await run_in_threadpool(
             lambda: agent_loop.run(
                 request.title, request.body, candidates, cutoff,
@@ -469,28 +470,31 @@ async def _execute(run_id: str, request: AgentTriageRequest, cutoff: str) -> Non
     except BaseException as e:  # noqa: BLE001 - a crash must still end the run
         exc = e
         run = getattr(e, "run", None)
-        if isinstance(e, asyncio.CancelledError):
+        if not isinstance(e, Exception):
+            # CancelledError, KeyboardInterrupt, SystemExit: end the run, then propagate.
             _append_failed(run_id, e, run, started)
             raise
-    finally:
-        if _is_running(run_id):
-            _append_failed(run_id, exc, run, started)
+        if not isinstance(e, agent_loop.RunError):
+            log.exception("live run %s crashed", run_id)
+    error = str(exc) if exc else None
+    if _is_running(run_id):
+        # The loop returned (or died) without a terminal event stored.
+        error = _append_failed(run_id, exc, run, started) or error
     try:
         if run is not None and run.turns:
             await record_run_turns(run, run_id=run_id, endpoint="/runs",
-                                   issue_number=request.issue_number,
-                                   error=str(exc) if exc else None)
-        elif exc is not None or not loop_started:
+                                   issue_number=request.issue_number, error=error)
+        elif error is not None:
             await db.record_call(
                 endpoint="/runs", provider="anthropic", model=C.ANTHROPIC_MODEL,
                 issue_number=request.issue_number, usage=None,
                 latency_ms=int((time.perf_counter() - started) * 1000),
                 cost_usd=Decimal("0"), stop_reason=None, request_id=None,
-                error=str(exc) if exc else "run ended without a final event",
-                run_id=run_id, turn=1,
+                error=error, run_id=run_id, turn=1,
             )
     except Exception:
-        pass  # accounting trouble must not undo a finished run
+        # accounting trouble must not undo a finished run, but must not vanish
+        log.exception("recording calls rows for live run %s failed", run_id)
 
 
 @app.post("/runs", status_code=202)

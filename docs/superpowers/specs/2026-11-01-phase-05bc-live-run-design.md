@@ -128,7 +128,9 @@ Every run ends with exactly one `done` or `failed` event.
 | `GET /runs/limits` | The current `Budget` as JSON (`max_turns`, `max_tokens`, `max_seconds`, `max_dollars`). No side effects; the UI uses it for the meters. Declared before `/runs/{run_id}` so `limits` is not read as a run id. |
 
 **Stated limits:** a server restart (including `--reload`) drops runs in
-progress; their paid turns are already in `calls`. Single process only.
+progress, and the `calls` rows for their turns so far (rows are written after
+the loop returns, as with `/triage/agent`). The same goes for a kill mid-run.
+Single process only.
 
 ## 3. Contract types — `api/schema.py`, `scripts/gen_types.py`
 
