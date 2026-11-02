@@ -53,7 +53,7 @@ AGENT_MAX_SECONDS = float(os.getenv("AGENT_MAX_SECONDS", "180"))
 # Dollars spent so far in the run.
 AGENT_MAX_DOLLARS = float(os.getenv("AGENT_MAX_DOLLARS", "0.05"))
 
-# Live run registry (the streamed /triage/agent/live runs).
+# Live run registry (the streamed POST /runs runs).
 # Most runs that may be "running" at once; a further start is refused.
 LIVE_MAX_CONCURRENT = int(os.getenv("LIVE_MAX_CONCURRENT", "2"))
 # Seconds a finished run stays replayable before it is evicted.

@@ -435,7 +435,8 @@ def _append_failed(run_id: str, exc: BaseException | None, run, started: float) 
     try:
         live.registry.append(run_id, event)
     except (KeyError, ValueError):
-        pass  # evicted, or a terminal event landed meanwhile
+        # evicted, or a terminal event landed meanwhile (or a contract mismatch)
+        log.exception("could not record fallback failed event for run %s", run_id)
     return event["message"]
 
 
