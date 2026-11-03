@@ -42,43 +42,53 @@ def test_check_patch_accepts_a_real_edit():
 
 def test_check_patch_rejects_path_absent():
     e = _edit("a", path="packages/vite/src/node/plugins/rolldownDepPlugin.ts")
-    with pytest.raises(ValueError, match="patch: "):
+    with pytest.raises(ValueError, match="no such file"):
         stages.check_patch(OLD)(_result(e))
 
 
 def test_check_patch_rejects_outside_src():
     e = _edit('"name"', path="packages/vite/package.json")
-    with pytest.raises(ValueError, match="patch: "):
+    with pytest.raises(ValueError, match="not an editable source file"):
         stages.check_patch(OLD)(_result(e))
 
 
 def test_check_patch_rejects_test_file():
     e = _edit("import", path="packages/vite/src/node/__tests__/plugins/css.spec.ts")
-    with pytest.raises(ValueError, match="patch: "):
+    with pytest.raises(ValueError, match="not an editable source file"):
         stages.check_patch(OLD)(_result(e))
 
 
 def test_check_patch_rejects_old_missing():
-    with pytest.raises(ValueError, match="patch: "):
+    with pytest.raises(ValueError, match="occurs 0 times"):
         stages.check_patch(OLD)(_result(_edit("this text is not in css.ts at all 9f3a")))
 
 
 def test_check_patch_rejects_old_repeated():
-    with pytest.raises(ValueError, match="patch: "):
+    n = "\n".join(_lines()).count("import ")
+    assert n >= 2
+    with pytest.raises(ValueError, match=f"occurs {n} times"):
         stages.check_patch(OLD)(_result(_edit("import ")))
 
 
 def test_check_patch_rejects_overlapping_edits():
-    a, b = _line(12), _line(13)
+    text = "\n".join(_lines())
+    ls = _lines()
+    i = next(i for i in range(len(ls) - 1)
+             if len(ls[i].strip()) > 15 and len(ls[i + 1].strip()) > 15
+             and text.count(ls[i] + "\n" + ls[i + 1]) == 1 and text.count(ls[i + 1]) == 1)
+    a, b = ls[i], ls[i + 1]
     first = _edit(a + "\n" + b)
     second = _edit(b)
-    with pytest.raises(ValueError, match="patch: "):
+    with pytest.raises(ValueError, match="overlap"):
         stages.check_patch(OLD)(_result(first, second))
 
 
 def test_check_patch_rejects_line_number_prefix():
-    with pytest.raises(ValueError, match="patch: "):
-        stages.check_patch(OLD)(_result(_edit("12: " + _line(12))))
+    line = _real_line()
+    n = _lines().index(line) + 1
+    stages.check_patch(OLD)(_result(_edit(line)))  # the bare line is fine
+    with pytest.raises(ValueError, match="occurs 0 times"):
+        stages.check_patch(OLD)(_result(_edit(f"{n}: " + line)))
 
 
 def test_patch_result_caps_edits_at_5():
