@@ -65,3 +65,24 @@ VITEST_LOAD_FAIL = " Test Files  1 failed (1)\n      Tests  no tests\n"
 ])
 def test_status(code, out, timed_out, oom, status):
     assert container.classify(code, out, timed_out, oom) == status
+
+
+def test_discard_removes_the_base_and_its_tar_offline_under_the_lock(monkeypatch):
+    calls = []
+    def fake(*args, input=None, timeout=120):
+        calls.append((args, container.LOCK._is_owned()))
+        return subprocess.CompletedProcess(args, 0, b"")
+    monkeypatch.setattr(container, "_docker", fake)
+    container.discard(_fix())
+    (args, held), = calls
+    assert held and args[0] == "run" and "--rm" in args
+    assert args[args.index("--network") + 1] == "none"
+    assert f"{container.WORK_VOLUME}:/work" in args
+    assert list(args[-4:]) == ["rm", "-rf", "/work/1", "/work/1.tar"]
+
+
+def test_discard_raises_on_docker_failure(monkeypatch):
+    monkeypatch.setattr(container, "_docker",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 125, b"no daemon"))
+    with pytest.raises(RuntimeError, match="no daemon"):
+        container.discard(_fix())

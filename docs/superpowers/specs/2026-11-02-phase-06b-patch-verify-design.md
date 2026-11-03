@@ -61,8 +61,11 @@ read-only. Every test run uses `--network none`, `--cpus 4`, `--memory 4g` and a
 300 s timeout. The base is its own git repo (the pre-fix tree committed once), so
 each run starts with `git reset --hard && git clean -fd` (no `-x`: the ignored
 `node_modules` and built `dist` stay) and then lays its files over it; the install
-is never repeated and no copy is made. Resetting at the start keeps a crashed run
-from leaking into the next, and runs on one base are serialised by a lock.
+is not repeated between runs and no copy is made. Resetting at the start keeps a
+crashed run from leaking into the next, and runs on one base are serialised by a
+lock. A base is 2–3 GB, so it is discarded once its issue is done (after its
+harness validation, or after its last patch job) and `prepare` rebuilds it on
+demand from the shared pnpm store; only one base, or a few, exists at a time.
 
 ## 2. The patch stage
 
@@ -104,7 +107,9 @@ runs the gold tests under the container limits above. It returns `passed`,
 `exit_code`, `seconds`, the output tail (last 4 KB) and `status`, one of
 `pass`, `test_fail` (vitest ran and reported failed test files), `timeout` or
 `infra` (anything else: Docker, reset, OOM, no tests found, missing base);
-`infra` is never counted as a test failure.
+`infra` is never counted as a test failure. The runner discards an issue's base
+after that issue's last job, and `prepare` rebuilds it from the shared pnpm store
+if it is needed again.
 
 **Outcome per run**, exactly one:
 

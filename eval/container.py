@@ -7,7 +7,8 @@ repo (so it can be reset), installs once and bundles packages/vite (vitest loads
 the workspace's vite from its dist, as Vite's own CI builds before `test-unit`). `run_tests` resets the base, lays the
 given files over it and runs vitest on the fix's tests. Resetting at the start, not
 the end, is what keeps a crashed or killed run from leaking into the next one.
-Callers hold LOCK around `run_tests`: runs on one base must not overlap.
+Callers hold LOCK around `run_tests`: runs on one base must not overlap. `discard`
+removes a base once its issue is done, so only a few exist at once (each is 2-3 GB).
 """
 from __future__ import annotations
 
@@ -145,6 +146,22 @@ def prepare(fix: Fix) -> tuple[bool, str]:
         _kill(name)
         return False, f"prepare timed out after {PREPARE_TIMEOUT}s"
     return r.returncode == 0, _tail(_text(r))
+
+
+DISCARD_TIMEOUT = 600
+
+
+def discard(fix: Fix) -> None:
+    """Remove the issue's base (2-3 GB of node_modules and dist): one base at a time keeps
+    the disk from filling. Idempotent; `prepare` rebuilds it from the shared pnpm store.
+    Raises on a Docker failure, since a base left behind is the disk problem itself."""
+    d = f"/work/{fix.issue}"
+    with LOCK:
+        r = _docker("run", "--rm", "--name", _name(fix, "discard"), "--network", "none",
+                    "-v", f"{WORK_VOLUME}:/work", IMAGE, "rm", "-rf", d, f"{d}.tar",
+                    timeout=DISCARD_TIMEOUT)
+    if r.returncode != 0:
+        raise RuntimeError(f"discard {d} failed (exit {r.returncode}): {_tail(_text(r))}")
 
 
 def _tar(files: dict[str, str]) -> bytes:

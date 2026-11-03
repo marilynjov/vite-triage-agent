@@ -17,6 +17,7 @@ import json
 import sys
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import NamedTuple
@@ -174,13 +175,28 @@ def make_patch_record(job: PatchJob, *, patch_fn=run_patch, verify_fn=verify) ->
     return rec
 
 
+def _discard(fix: Fix, discard_fn) -> None:
+    try:
+        discard_fn(fix)
+    except Exception as exc:  # the records stand; the next prepare shows if Docker broke
+        print(f"\npatch_eval: discard {fix.issue} failed: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+
+
 def run_patch_jobs(jobs: list[PatchJob], path: Path, *, cap_dollars: float, workers: int = 4,
-                   patch_fn=run_patch, verify_fn=verify) -> dict:
+                   patch_fn=run_patch, verify_fn=verify, discard_fn=None) -> dict:
     """Run the jobs on a thread pool, appending each record as one flushed line.
 
     Once the actual spend passes cap_dollars no new job starts; jobs in flight finish
-    and are recorded. Skipped jobs are left for a resume."""
+    and are recorded. Skipped jobs are left for a resume.
+
+    Jobs start in (issue, repeat) order, and an issue's base is discarded once its last
+    job here is done (verified, or recorded without a verify), so only about `workers`
+    bases (2-3 GB each) exist at once. A later job of a discarded issue never exists:
+    the count only reaches zero after every job of that issue has finished."""
     path = Path(path)
+    jobs = sorted(jobs, key=lambda j: (j.issue, j.repeat))
+    left = Counter(j.issue for j in jobs)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = threading.Lock()
     state = {"ran": 0, "spent": 0.0, "stopped_for_cap": False}
@@ -195,6 +211,16 @@ def run_patch_jobs(jobs: list[PatchJob], path: Path, *, cap_dollars: float, work
 
     with open(path, "a") as fh, ThreadPoolExecutor(workers) as pool:
         def work(job: PatchJob) -> None:
+            try:
+                run(job)
+            finally:
+                with lock:
+                    left[job.issue] -= 1
+                    last = left[job.issue] == 0
+                if last:
+                    _discard(job.fix, discard_fn or container.discard)
+
+        def run(job: PatchJob) -> None:
             with lock:
                 if state["spent"] > cap_dollars:
                     state["stopped_for_cap"] = True

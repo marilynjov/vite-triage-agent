@@ -60,6 +60,7 @@ def no_git_no_docker(monkeypatch):
     monkeypatch.setattr(patch_eval, "path_exists", lambda sha, path: True)
     monkeypatch.setattr(patch_eval, "patch_to_diff", lambda edits, rev: "DIFF")
     monkeypatch.setattr(container, "prepare", lambda fix: (True, ""))
+    monkeypatch.setattr(container, "discard", lambda fix: None)
 
 
 def rec(fakes, j=None):
@@ -346,3 +347,93 @@ def test_cli_issues_filter(tmp_path, monkeypatch):
                         {"ran": 0, "spent": 0.0, "stopped_for_cap": False})
     patch_eval.main(["--issues", "99"])
     assert seen["jobs"] == []
+
+
+# --- one base at a time -----------------------------------------------------
+
+def _fix(issue):
+    return Fix(issue, "fixsha", "presha", ("t.spec.ts",), ("t.spec.ts",), (), ())
+
+
+def _job(issue, repeat):
+    return patch_eval.PatchJob(issue, repeat, {**ROW, "issue": issue}, src(issue, repeat), _fix(issue))
+
+
+class Events:
+    def __init__(self):
+        self.log, self.lock = [], threading.Lock()
+
+    def add(self, *e):
+        with self.lock:
+            self.log.append(e)
+
+    def verify_fn(self, fix, edits):
+        self.add("verify", fix.issue)
+        return VerifyResult(True, 0, 1.0, "tail", False, "pass")
+
+    def discard_fn(self, fix):
+        self.add("discard", fix.issue)
+
+
+def test_jobs_run_in_issue_repeat_order(tmp_path):
+    ev = Events()
+    jobs = [_job(3, 1), _job(1, 1), _job(3, 0), _job(1, 0), _job(2, 0)]
+    patch_eval.run_patch_jobs(jobs, tmp_path / "o.jsonl", cap_dollars=5, workers=1,
+                              patch_fn=Fakes().patch_fn, verify_fn=ev.verify_fn,
+                              discard_fn=ev.discard_fn)
+    keys = [(r["issue"], r["repeat"]) for r in patch_eval.load_patch_records(tmp_path / "o.jsonl")]
+    assert keys == [(1, 0), (1, 1), (2, 0), (3, 0), (3, 1)]
+    assert ev.log == [("verify", 1), ("verify", 1), ("discard", 1), ("verify", 2), ("discard", 2),
+                      ("verify", 3), ("verify", 3), ("discard", 3)]
+
+
+@pytest.mark.parametrize("workers", [1, 4])
+def test_each_issue_is_discarded_once_after_its_last_verify(tmp_path, workers):
+    import random
+    import time as _t
+    ev = Events()
+    rng = random.Random(0)
+
+    def slow_patch(*a, **k):
+        _t.sleep(rng.random() * 0.02)
+        return good_run()
+
+    jobs = [_job(i, r) for i in (1, 2, 3, 4) for r in range(3)]
+    patch_eval.run_patch_jobs(jobs, tmp_path / "o.jsonl", cap_dollars=5, workers=workers,
+                              patch_fn=slow_patch, verify_fn=ev.verify_fn,
+                              discard_fn=ev.discard_fn)
+    for i in (1, 2, 3, 4):
+        assert ev.log.count(("discard", i)) == 1
+        at = ev.log.index(("discard", i))
+        assert ev.log[:at].count(("verify", i)) == 3, ev.log
+        assert ("verify", i) not in ev.log[at:]
+
+
+def test_issue_with_only_unverified_jobs_is_still_discarded_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(patch_eval, "path_exists", lambda sha, path: False)  # stale_path
+    ev = Events()
+    patch_eval.run_patch_jobs([_job(5, 0), _job(5, 1)], tmp_path / "o.jsonl", cap_dollars=5,
+                              patch_fn=Fakes().patch_fn, verify_fn=ev.verify_fn,
+                              discard_fn=ev.discard_fn)
+    assert ev.log == [("discard", 5)]
+
+
+def test_patch_error_jobs_count_toward_the_last_job(tmp_path):
+    ev = Events()
+    f = Fakes(exc=RunError("bad patch", good_run()))
+    patch_eval.run_patch_jobs([_job(6, 0), _job(6, 1)], tmp_path / "o.jsonl", cap_dollars=5,
+                              workers=2, patch_fn=f.patch_fn, verify_fn=ev.verify_fn,
+                              discard_fn=ev.discard_fn)
+    assert ev.log == [("discard", 6)]
+
+
+def test_discard_defaults_to_container_discard_and_a_failure_is_not_fatal(tmp_path, monkeypatch, capsys):
+    def bad(fix):
+        raise RuntimeError("rm failed")
+    monkeypatch.setattr(container, "discard", bad)
+    f = Fakes()
+    out = patch_eval.run_patch_jobs([_job(1, 0)], tmp_path / "o.jsonl", cap_dollars=5,
+                                    patch_fn=f.patch_fn, verify_fn=f.verify_fn)
+    assert out["ran"] == 1
+    err = capsys.readouterr().err
+    assert "discard 1 failed" in err and "rm failed" in err

@@ -16,9 +16,14 @@ def _run(status, tail="t", seconds=1.5):
     return TestRun(code, seconds, tail, status == "timeout", status)
 
 
+DISCARDED: list[int] = []
+
+
 @pytest.fixture(autouse=True)
 def fake_file_at(monkeypatch):
     monkeypatch.setattr(vh, "file_at", lambda sha, path: f"{sha}:{path}")
+    DISCARDED.clear()
+    monkeypatch.setattr(vh, "discard", lambda fix: DISCARDED.append(fix.issue))
 
 
 def _validate(prep=(True, ""), runs=()):
@@ -160,3 +165,44 @@ def test_exception_recorded_as_infra_error(tmp_path, monkeypatch):
     vh.main([])
     rec = vh.load_harness()[7]
     assert rec["reason"] == "infra_error" and "docker died" in rec["fail_tail"]
+
+
+# --- one base at a time -----------------------------------------------------
+
+def _invalid(fix, **kw):
+    return {"issue": fix.issue, "valid": False, "reason": "fails_with_fix", "seconds": 1,
+            "prefix_sha": "p", "fix_sha": "f"}
+
+
+@pytest.mark.parametrize("validate_fn", [_ok, _invalid])
+def test_each_validated_issue_is_discarded_once_after_its_record(tmp_path, monkeypatch, validate_fn):
+    _setup(monkeypatch, tmp_path, None, validate_fn)
+    order = []
+    monkeypatch.setattr(vh, "_append", lambda rec: order.append(("append", rec["issue"])))
+    monkeypatch.setattr(vh, "discard", lambda fix: order.append(("discard", fix.issue)))
+    vh.main([])
+    assert order == [("append", 7), ("discard", 7)]
+
+
+def test_exception_path_still_discards(tmp_path, monkeypatch):
+    def boom(fix, **kw):
+        raise RuntimeError("docker died")
+    _setup(monkeypatch, tmp_path, None, boom)
+    vh.main([])
+    assert DISCARDED == [7]
+
+
+def test_cached_issue_is_not_discarded(tmp_path, monkeypatch):
+    _setup(monkeypatch, tmp_path, _rec(valid=True), _ok)
+    vh.main([])
+    assert DISCARDED == []
+
+
+def test_discard_fn_is_injectable_and_a_failure_is_reported_not_fatal(tmp_path, monkeypatch, capsys):
+    _setup(monkeypatch, tmp_path, None, _ok)
+    def bad(fix):
+        raise RuntimeError("rm failed")
+    vh.main([], discard_fn=bad)
+    assert vh.load_harness()[7]["valid"]
+    err = capsys.readouterr().err
+    assert "discard 7 failed" in err and "rm failed" in err

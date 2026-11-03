@@ -16,8 +16,11 @@ def fix():
     f = fixes.fix_for(next(r for r in rows if r["issue"] == 14515), commits)
     container.ensure_image()
     ok, tail = container.prepare(f)
-    assert ok, tail
-    return f
+    try:
+        assert ok, tail
+        yield f
+    finally:  # one base at a time: never leave 2-3 GB behind
+        container.discard(f)
 
 
 def _gold(fix):
@@ -56,3 +59,14 @@ def test_a_missing_base_is_infra_not_a_test_failure(fix):
     with container.LOCK:
         run = container.run_tests(ghost, _gold(fix))
     assert run.status == "infra" and run.exit_code != 0, run.tail
+
+
+def test_discard_is_idempotent_and_prepare_rebuilds(fix):
+    container.discard(fix)
+    container.discard(fix)  # nothing left: still fine
+    with container.LOCK:
+        gone = container.run_tests(fix, _gold(fix))
+    assert gone.status == "infra"  # base not prepared
+    ok, tail = container.prepare(fix)
+    assert ok, tail
+    assert verify.verify(fix, []).status == "test_fail"

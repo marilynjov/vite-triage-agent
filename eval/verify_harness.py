@@ -15,7 +15,7 @@ import sys
 import time
 
 from eval.ablation import val_rows
-from eval.container import ensure_image, prepare, run_tests
+from eval.container import discard, ensure_image, prepare, run_tests
 from eval.fixes import Fix, file_at, fix_for
 from mining import config as M
 
@@ -100,7 +100,17 @@ def _append(rec: dict) -> None:
         f.flush()
 
 
-def main(argv: list[str] | None = None) -> None:
+def _discard(fix: Fix, discard_fn) -> None:
+    """Free the issue's base (2-3 GB) once its record is written; a failure is reported,
+    not fatal: the record stands, and the next prepare will show if Docker is broken."""
+    try:
+        discard_fn(fix)
+    except Exception as e:
+        print(f"verify_harness: discard {fix.issue} failed: {type(e).__name__}: {e}",
+              file=sys.stderr)
+
+
+def main(argv: list[str] | None = None, *, discard_fn=None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--issues", help="comma-separated issue numbers to validate")
     args = ap.parse_args(argv)
@@ -133,8 +143,11 @@ def main(argv: list[str] | None = None) -> None:
                    "prefix_sha": fix.prefix_sha, "fix_sha": fix.fix_sha,
                    "fail_tail": f"{type(e).__name__}: {e}", "pass_tail": "",
                    "seconds": time.monotonic() - t0}
-        _append(rec)
-        cached[fix.issue] = rec
+        try:
+            _append(rec)
+            cached[fix.issue] = rec
+        finally:  # one base on disk at a time, even if the append itself fails
+            _discard(fix, discard_fn or discard)
 
     print(f"{'issue':>7}  {'valid':5}  {'reason':20}  seconds")
     for fix in fixes:
