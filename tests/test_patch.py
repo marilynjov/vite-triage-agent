@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import subprocess
+from types import SimpleNamespace as NS
 
 import pytest
 from pydantic import ValidationError
 
 import mining.config as M
 from agent import patch, stages, tools
+from agent.loop import Budget, RunError
 from api import schema as S
 
 CSS = "packages/vite/src/node/plugins/css.ts"
@@ -131,3 +133,71 @@ def test_patch_prompt_says_lines_are_from_newer_code():
 
 def test_patch_tools_are_read_only_subset():
     assert {t["name"] for t in stages.PATCH_TOOLS} == {"read_file", "grep", "list_dir"}
+
+
+# --- run_patch: one loop call at the pre-fix commit ---
+
+BIG = Budget(max_turns=99, max_tokens=10**9, max_seconds=10**6, max_dollars=100.0)
+CUTOFF = "2024-01-01T00:00:00Z"
+HYP = {"fault": {"path": CSS, "start_line": 1, "end_line": 5, "mechanism": "m"}}
+
+
+def _resp(content, stop="end_turn"):
+    usage = NS(input_tokens=100, output_tokens=10,
+               cache_creation_input_tokens=0, cache_read_input_tokens=0)
+    return NS(content=content, stop_reason=stop, usage=usage,
+              model="claude-haiku-5-5", _request_id="req_x")
+
+
+def _tool_turn(path="nope.ts"):
+    return _resp([NS(type="tool_use", id="t", name="read_file", input={"path": path})],
+                 "tool_use")
+
+
+class FakeClient:
+    def __init__(self, *responses):
+        self.calls, self._responses = [], list(responses)
+        self.messages = self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        return self._responses.pop(0)
+
+
+def _final(*edits):
+    return _resp([NS(type="text", text=_result(*edits).model_dump_json())])
+
+
+def _run(client):
+    return patch.run_patch("t", "b", HYP, OLD, CUTOFF, budget=BIG, client=client)
+
+
+def test_run_patch_sends_only_its_three_tools():
+    line = _real_line()
+    c = FakeClient(_final(_edit(line, line + " // note")))
+    r = _run(c)
+    assert {t["name"] for t in c.calls[0]["tools"]} == {"read_file", "grep", "list_dir"}
+    assert r.result.edits[0].path == CSS
+
+
+def test_run_patch_tools_read_the_prefix():
+    gone = "packages/vite/src/node/plugins/rolldownDepPlugin.ts"
+    line = _real_line()
+    c = FakeClient(_tool_turn(gone), _final(_edit(line, line + " // note")))
+    _run(c)
+    results = c.calls[1]["messages"][2]["content"]  # shared list: index, not [-1]
+    assert "no such file" in str(results[0]["content"])
+
+
+def test_run_patch_caps_turns_at_6():
+    assert patch.PATCH_TURNS == 6
+    c = FakeClient(*[_tool_turn() for _ in range(10)])
+    with pytest.raises(RunError):
+        _run(c)
+    assert len(c.calls) == 6
+
+
+def test_run_patch_bad_edit_raises_run_error():
+    c = FakeClient(_final(_edit("this text is not in the file at all zzz")))
+    with pytest.raises(RunError, match="patch: "):
+        _run(c)

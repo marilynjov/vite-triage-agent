@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import difflib
 
-from agent import tools
-from api.schema import Edit
+from agent import loop, stages, tools
+from agent.loop import Budget, Run
+from api.schema import Edit, PatchResult
+
+PATCH_TURNS = 6
 
 
 def _original(path: str, rev: str) -> str:
@@ -32,3 +35,14 @@ def patch_to_diff(edits: list[Edit], rev: str) -> str:
             _original(path, rev).splitlines(keepends=True), new.splitlines(keepends=True),
             fromfile=f"a/{path}", tofile=f"b/{path}"))
     return "".join(diff)
+
+
+def run_patch(title: str, body: str, hypothesis: dict, prefix: str, cutoff: str, *,
+              budget: Budget | None = None, client=None) -> Run:
+    """One loop call with every tool reading the tree at `prefix`, the commit before the fix."""
+    with tools.at_rev(prefix):
+        return loop.run(
+            title, body, [], cutoff, system=stages.PATCH_SYSTEM, tool_specs=stages.PATCH_TOOLS,
+            max_turns=PATCH_TURNS, budget=budget, client=client, output_model=PatchResult,
+            check=stages.check_patch(prefix),
+            prompt=stages.patch_prompt(title, body, hypothesis))
