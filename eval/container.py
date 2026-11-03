@@ -28,7 +28,7 @@ IMAGE = "vite-triage-verify:node18"
 DOCKERFILE_DIR = M.ROOT / "eval" / "docker"
 WORK_VOLUME = "vtr-work"
 STORE_VOLUME = "vtr-store"
-LOCK = threading.Lock()
+LOCK = threading.RLock()  # reentrant: callers hold it across prepare + verify, and verify takes it too
 
 BUILD_TIMEOUT = 1800
 PREPARE_TIMEOUT = 3600

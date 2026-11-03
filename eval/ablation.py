@@ -248,10 +248,20 @@ def pending_jobs(arms: list[Arm], rows: list[dict], repeats: int, split: str,
     return jobs
 
 
-def val_rows(split: str, n: int) -> list[dict]:
-    """The same slice eval.agent uses: sorted by issue, first n."""
+def val_rows(split: str, n: int, issues: set[int] | None = None) -> list[dict]:
+    """The same slice eval.agent uses: sorted by issue, first n.
+
+    With `issues`, exactly the rows with those ids (sorted by issue); n is ignored."""
     rows = [json.loads(l) for l in open(M.SPLIT_DIR / f"{split}.jsonl")]
-    return sorted(rows, key=lambda r: r["issue"])[:n]
+    rows = sorted(rows, key=lambda r: r["issue"])
+    if issues is not None:
+        return [r for r in rows if r["issue"] in issues]
+    return rows[:n]
+
+
+def read_issue_ids(path: str) -> set[int]:
+    """Issue ids in a file, separated by commas or whitespace."""
+    return {int(t) for t in Path(path).read_text().replace(",", " ").split()}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -261,6 +271,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--n", type=int, default=40)
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--name")
+    ap.add_argument("--issues", metavar="PATH",
+                    help="file of issue ids: run exactly these rows (--n is ignored)")
     ap.add_argument("--report", metavar="PATH",
                     help="print the report for an existing run file and exit")
     ap.add_argument("--max-dollars", type=float, default=3.0,
@@ -286,7 +298,8 @@ def main(argv: list[str] | None = None) -> None:
     if any(ARMS[a].system is not None or ARMS[a].kind == "pipeline" for a in names) and C.PROVIDER != "anthropic":
         sys.exit("model arms need PROVIDER=anthropic")
 
-    rows = val_rows(args.split, args.n)
+    rows = (val_rows(args.split, args.n, read_issue_ids(args.issues)) if args.issues
+            else val_rows(args.split, args.n))
     regions = None
     if any(ARMS[a].kind == "pipeline" for a in names):  # once per run, only for the staged arm
         from .gold_regions import load_regions

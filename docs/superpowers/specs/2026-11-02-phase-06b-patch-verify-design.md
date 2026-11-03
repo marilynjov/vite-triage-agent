@@ -113,8 +113,9 @@ runs the gold tests under the container limits above. It returns `passed`,
 | `harness_invalid` | the issue failed §1; not counted in any rate |
 | `stale_path` | the hypothesis's `fault.path` does not exist at the pre-fix commit; no model call |
 | `patch_error` | the stage raised (`RunError`, budget stop, failed check) |
-| `test_fail` | the edits applied but the gold tests failed or timed out |
+| `test_fail` | the gold tests failed or timed out (status `test_fail` or `timeout`) |
 | `pass` | the gold tests passed |
+| `infra` | verify could not run (docker, base or OOM failure); outcome null; retried on resume, never counted |
 
 **New staged runs:** `eval/ablation.py` gains `--issues <file of ids>`, which
 restricts the rows to those ids (still sorted by issue). The harness-valid

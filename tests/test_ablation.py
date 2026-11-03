@@ -429,3 +429,23 @@ def test_staged_without_regions_raises(tmp_path):
     job = ablation.Job(ARMS["staged"], ROW, 0, "val", lambda: [])
     with pytest.raises(ValueError):
         ablation.run_jobs([job], tmp_path / "r.jsonl")
+
+
+def test_val_rows_with_issues_returns_exactly_those_sorted(tmp_path, monkeypatch):
+    monkeypatch.setattr(ablation.M, "SPLIT_DIR", tmp_path)
+    (tmp_path / "val.jsonl").write_text(
+        "\n".join(json.dumps({"issue": i}) for i in (20000, 14515, 5, 13907)) + "\n")
+    got = ablation.val_rows("val", 40, {14515, 13907})
+    assert [r["issue"] for r in got] == [13907, 14515]
+    assert len(ablation.val_rows("val", 2)) == 2
+
+
+def test_cli_issues_file_selects_rows(tmp_path, monkeypatch, capsys):
+    _cli_env(tmp_path, monkeypatch)
+    seen = {}
+    monkeypatch.setattr(ablation, "val_rows",
+                        lambda split, n, issues=None: seen.update(i=issues) or [])
+    f = tmp_path / "ids.txt"
+    f.write_text("14515, 13907\n20000\n")
+    ablation.main(["--arms", "retrieval", "--issues", str(f), "--name", "y"])
+    assert seen["i"] == {14515, 13907, 20000}
