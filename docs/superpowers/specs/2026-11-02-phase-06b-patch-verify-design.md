@@ -53,8 +53,11 @@ itself: if the real fix does not pass, the harness is wrong, not the model.
 
 **Container:** one image from `node:18` with `git` and the repo mounted
 read-only. Every test run uses `--network none`, `--cpus 4`, `--memory 4g` and a
-300 s timeout. A copy of the base is made with `cp -a --reflink=auto` inside the
-volume, so the install is never repeated.
+300 s timeout. The base is its own git repo (the pre-fix tree committed once), so
+each run starts with `git reset --hard && git clean -fd` (no `-x`: the ignored
+`node_modules` and built `dist` stay) and then lays its files over it; the install
+is never repeated and no copy is made. Resetting at the start keeps a crashed run
+from leaking into the next, and runs on one base are serialised by a lock.
 
 ## 2. The patch stage
 

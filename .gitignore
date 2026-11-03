@@ -15,3 +15,6 @@ data/bowling/
 
 # Ablation run records (Phase 05a): reproducible, and large.
 data/runs/
+
+# Verify scratch output (Phase 06b).
+data/verify_*.txt
