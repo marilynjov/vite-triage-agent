@@ -135,3 +135,29 @@ def test_missing_search_path_is_an_error_not_zero_results(call):
     # matches" made the model conclude the code had none.
     out = call()
     assert out.startswith("Error: ") and "packages vite" in out
+
+
+OLD = "72f6a52^"  # the commit before #14515's fix, July 2023
+
+
+def _old():
+    return tools._git("rev-parse", OLD).stdout.strip()
+
+
+def test_reads_default_to_the_pin():
+    assert tools.current_rev() == tools.pinned_sha()
+
+
+def test_at_rev_reads_the_older_tree_and_restores():
+    old = _old()
+    with tools.at_rev(old):
+        assert tools.current_rev() == old
+        assert tools.read_file("packages/vite/src/node/optimizer/rolldownDepPlugin.ts").startswith("Error: no such file")
+        assert not tools.read_file(CSS).startswith("Error: ")
+    assert tools.current_rev() == tools.pinned_sha()
+    assert not tools.read_file("packages/vite/src/node/optimizer/rolldownDepPlugin.ts").startswith("Error: ")
+
+
+def test_file_length_follows_the_revision():
+    with tools.at_rev(_old()):
+        assert tools.file_length(CSS) != 3685

@@ -13,11 +13,17 @@ caller supplies and the model never sees, and hides every commit after it.
 
 Failures come back as strings starting "Error: " (the model can read and
 recover from them); `execute` flags them so the loop can set `is_error`.
+
+`at_rev(sha)` points every read at another commit for the duration of a `with`
+block (the patch stage reads the code as it was before a fix); outside one, the
+pin is used.
 """
 from __future__ import annotations
 
+import contextvars
 import posixpath
 import subprocess
+from contextlib import contextmanager
 from functools import lru_cache
 
 import mining.config as M
@@ -33,6 +39,23 @@ GIT_TIMEOUT = 30
 @lru_cache(maxsize=1)
 def pinned_sha() -> str:
     return M.PINNED_SHA.read_text().strip()
+
+
+_REV: contextvars.ContextVar[str | None] = contextvars.ContextVar("rev", default=None)
+
+
+def current_rev() -> str:
+    """The revision reads come from: the `at_rev` override, else the pin."""
+    return _REV.get() or pinned_sha()
+
+
+@contextmanager
+def at_rev(sha: str):
+    token = _REV.set(sha)
+    try:
+        yield
+    finally:
+        _REV.reset(token)
 
 
 def _git(*args: str) -> subprocess.CompletedProcess:
@@ -69,7 +92,7 @@ def _safe(path: str) -> str | None:
 
 def _kind(path: str) -> str | None:
     """'blob', 'tree', or None when the path does not exist at the pin."""
-    r = _git("cat-file", "-t", f"{pinned_sha()}:{path}")
+    r = _git("cat-file", "-t", f"{current_rev()}:{path}")
     return r.stdout.strip() if r.returncode == 0 else None
 
 
@@ -82,7 +105,7 @@ def list_dir(path: str = "") -> str:
         return f"Error: no such path {p!r}"
     if kind != "tree":
         return f"Error: {p!r} is a file, not a directory"
-    out = _git("ls-tree", f"{pinned_sha()}:{p}").stdout
+    out = _git("ls-tree", f"{current_rev()}:{p}").stdout
     prefix = f"{p}/" if p else ""
     entries = []
     for line in out.splitlines():
@@ -100,7 +123,7 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
         return f"Error: no such file {p!r}"
     if kind != "blob":
         return f"Error: {p!r} is a directory; use list_dir"
-    r = _git("show", f"{pinned_sha()}:{p}")
+    r = _git("show", f"{current_rev()}:{p}")
     if "\x00" in r.stdout:
         return f"Error: {p!r} is a binary file"
     lines = _split_lines(r.stdout)
@@ -134,7 +157,7 @@ def grep(pattern: str, path: str = "") -> str:
         return f"Error: unsafe path {path!r}"
     if err := _missing(p, path):
         return err
-    sha = pinned_sha()
+    sha = current_rev()
     # -e makes a pattern like "--output=x" a pattern, not an option.
     args = ["grep", "-n", "-I", "-E", "-e", pattern, sha]
     if p:
@@ -156,7 +179,7 @@ def git_log(path: str = "", n: int = 10, *, cutoff: str) -> str:
     if err := _missing(p, path):
         return err
     n = max(1, min(int(n), MAX_LOG))
-    args = ["log", pinned_sha(), f"--before={cutoff}", f"-n{n}",
+    args = ["log", current_rev(), f"--before={cutoff}", f"-n{n}",
             "--format=%h %cI %s", "--name-only"]
     if p:
         args += ["--", p]
@@ -226,9 +249,13 @@ def execute(name: str, tool_input: dict, *, cutoff: str) -> tuple[str, bool]:
     return out, out.startswith("Error: ")
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=8)
+def _tracked_at(rev: str) -> frozenset[str]:
+    return frozenset(_git("ls-tree", "-r", "--name-only", rev).stdout.splitlines())
+
+
 def _tracked() -> frozenset[str]:
-    return frozenset(_git("ls-tree", "-r", "--name-only", pinned_sha()).stdout.splitlines())
+    return _tracked_at(current_rev())
 
 
 def check_in_scope(result: GroundedTriageResult) -> None:
@@ -245,5 +272,5 @@ def file_length(path: str) -> int | None:
     p = _safe(path)
     if not p or _kind(p) != "blob":
         return None
-    r = _git("show", f"{pinned_sha()}:{p}")
+    r = _git("show", f"{current_rev()}:{p}")
     return len(_split_lines(r.stdout)) if r.returncode == 0 else None
