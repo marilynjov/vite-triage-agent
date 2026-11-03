@@ -851,10 +851,12 @@ one new staged run per valid issue outside the slice
 at the pin. Patches in `data/runs/val-n40-patch.jsonl`.
 
 Commands: `python -m eval.verify_harness`, then
-`PROVIDER=anthropic python -m eval.ablation --arms staged --issues data/verify_valid_new.txt --repeats 1 --name val-unit-staged-r1 --max-dollars 0.75`,
-then `PROVIDER=anthropic python -m eval.patch_eval --max-dollars 0.55`, then
-`python -m eval.patch_report`. The smoke test's runs went into the same files
-and are counted below.
+`PROVIDER=anthropic python -m eval.ablation --arms staged --issues data/verify_valid_new.txt --repeats 1 --name val-unit-staged-r1 --max-dollars 0.22`,
+then `PROVIDER=anthropic python -m eval.patch_eval --max-dollars 0.12 --workers 1`,
+then `python -m eval.patch_report`. The caps are lowered because only $0.44 of
+credit was left; the staged cap stopped that run at 22 of 23 records. The
+2-issue smoke test ran with `--max-dollars 0.55 --workers 1`; its runs went
+into the same files and are counted below.
 
 **Harness: 29 of 43 issues are valid (no model call).** Valid means the gold
 tests fail on the pre-fix tree and pass with the real fix's source applied.
@@ -872,7 +874,7 @@ tests fail on the pre-fix tree and pass with the real fix's source applied.
   the real fix's own tests do not pass under the harness. Not diagnosed one by
   one; they are excluded, not guessed at.
 - `install_failed`: four (#15781, #17467, #17892, #18489) are fixes merged in
-  2025 whose pre-fix tree needs Node ≥ 20 (the rolldown `build-bundle` fails,
+  2025–2026 whose pre-fix tree needs Node ≥ 20 (the rolldown `build-bundle` fails,
   or the pinned pnpm needs newer Node) under the `node:18` image. #17409 was an
   I/O error when the host disk filled during the run.
 - `timeout`: #15076, at 300 s. `passes_without_fix`: #18527.
@@ -928,11 +930,11 @@ Misses together: 3 of 9 runs, 3 of 5 patchable.
 **Among source hits, by `fault_hit`** (whether 06a's fault lines overlapped a
 gold region).
 
-| fault_hit | runs | patch_error | pass |
-|---|---|---|---|
-| True | 8 | 2 | 1 (1/8) |
-| False | 6 | 0 | 1 (1/6) |
-| None (no region gold) | 6 | 2 | 1 (1/6) |
+| fault_hit | runs | stale_path | patchable | pass | pass / patchable |
+|---|---|---|---|---|---|
+| True | 8 | 0 | 8 | 1 | 1/8 (12.5%) |
+| False | 6 | 0 | 6 | 1 | 1/6 (16.7%) |
+| None (no region gold) | 6 | 0 | 6 | 1 | 1/6 (16.7%) |
 
 **Cost.** $0.117 for the patch run: $0.005 per patch (25 patchable runs; a
 `stale_path` makes no call) and $0.020 per pass. A verify took 1–11 s on a
@@ -957,7 +959,7 @@ exact behaviour.
 **Stale paths: 4 of 29 runs (13.8%).** All four are on two slice issues
 (#14010, #14433, both repeats), and all four faults name
 `packages/vite/src/module-runner/runner.ts`, which does not exist before these
-2023 fixes. None of the 18 new runs had one. 06a localises against the 2026
+March 2024 fixes. None of the 18 new runs had one. 06a localises against the 2026
 pin; on these two SSR issues it found the bug in code that was written after
 the bug was fixed. That is a direct count of how the pin can warp a
 hypothesis, on 2 of 24 issues here.

@@ -47,9 +47,13 @@ def summarize(records: list[dict], harness: dict[int, dict]) -> dict:
     def tally(group_key, rows):
         out = {}
         for r in rows:
-            d = out.setdefault(group_key(r), {"n": 0, "pass": 0})
+            d = out.setdefault(group_key(r), {"n": 0, "pass": 0, "stale": 0, "patchable": 0})
             d["n"] += 1
             d["pass"] += r["outcome"] == "pass"
+            d["stale"] += r["outcome"] == "stale_path"
+            d["patchable"] += r["outcome"] in ("patch_error", "test_fail", "pass")
+        for d in out.values():
+            d["pass_rate"] = _div(d["pass"], d["patchable"])
         return out
 
     return {
@@ -82,12 +86,12 @@ def markdown(s: dict) -> str:
     for o, d in sorted(s["outcomes"].items(), key=lambda kv: -kv[1]["n"]):
         L.append(f"  {o:<16}{d['n']:>5}{_pct(d['share']):>9}{_pct(d['min']):>8}{_pct(d['max']):>8}")
     L += ["", f"patchable pass rate (excl. stale_path): {_pct(s['patchable_pass_rate'])}",
-          "", "By source outcome", f"  {'source':<18}{'n':>5}{'pass':>6}"]
+          "", "By source outcome", f"  {'source':<18}{'n':>5}{'stale':>7}{'patchable':>11}{'pass':>6}{'pass/patchable':>16}"]
     for k, d in sorted(s["by_source_outcome"].items(), key=lambda kv: str(kv[0])):
-        L.append(f"  {str(k):<18}{d['n']:>5}{d['pass']:>6}")
-    L += ["", "Among source hits, by fault_hit", f"  {'fault_hit':<18}{'n':>5}{'pass':>6}"]
+        L.append(f"  {str(k):<18}{d['n']:>5}{d['stale']:>7}{d['patchable']:>11}{d['pass']:>6}{_pct(d['pass_rate']):>16}")
+    L += ["", "Among source hits, by fault_hit", f"  {'fault_hit':<18}{'n':>5}{'stale':>7}{'patchable':>11}{'pass':>6}{'pass/patchable':>16}"]
     for k, d in sorted(s["by_fault_hit"].items(), key=lambda kv: str(kv[0])):
-        L.append(f"  {str(k):<18}{d['n']:>5}{d['pass']:>6}")
+        L.append(f"  {str(k):<18}{d['n']:>5}{d['stale']:>7}{d['patchable']:>11}{d['pass']:>6}{_pct(d['pass_rate']):>16}")
     L += ["", f"total spend {_money(s['total_spend'])}   cost/patch {_money(s['cost_per_patch'])}"
               f"   cost/pass {_money(s['cost_per_pass'])}",
           f"errors (excluded): {s['errors'] or 'none'}"]

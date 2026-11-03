@@ -91,7 +91,7 @@ def _safe(path: str) -> str | None:
 
 
 def _kind(path: str) -> str | None:
-    """'blob', 'tree', or None when the path does not exist at the pin."""
+    """'blob', 'tree', or None when the path does not exist at this commit."""
     r = _git("cat-file", "-t", f"{current_rev()}:{path}")
     return r.stdout.strip() if r.returncode == 0 else None
 
@@ -140,14 +140,14 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
 
 
 def _missing(p: str, path: str) -> str | None:
-    """An Error for a search path absent at the pin, or None.
+    """An Error for a search path absent at this commit, or None.
 
     git grep and git log treat an unknown pathspec as "nothing here", so
     without this a typo or two paths in one string (`"Packages Bowling"`)
     came back as zero results and read as evidence of absence.
     """
     if p and _kind(p) is None:
-        return f"Error: no such path at the pinned commit: {path!r}. Pass one repo-relative file or directory."
+        return f"Error: no such path at this commit: {path!r}. Pass one repo-relative file or directory."
     return None
 
 
@@ -268,7 +268,7 @@ def check_in_scope(result: GroundedTriageResult) -> None:
 
 
 def file_length(path: str) -> int | None:
-    """Lines in a file at the pin (counted as read_file does), or None if not a file there."""
+    """Lines in a file at this commit (counted as read_file does), or None if not a file there."""
     p = _safe(path)
     if not p or _kind(p) != "blob":
         return None

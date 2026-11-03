@@ -616,7 +616,7 @@ three parameters section 9 added:
 | | |
 |---|---|
 | First message | the issue, then the stored `HypothesisResult` as JSON, with a note that its line numbers come from newer code and may be off |
-| Tools | `read_file`, `grep`, `list_dir` at the pre-fix commit (no `git_log`) |
+| Tools | `read_file`, `grep`, `list_dir` at the pre-fix commit (`git_log` is not offered; `tools.execute` would still run it if called, but at the pre-fix commit history holds no fix, so it cannot leak) |
 | Turns | 6 (`PATCH_TURNS`) |
 | Output | `PatchResult`: `reasoning` and 1 to 5 `Edit`s (`path`, `old`, `new`) |
 | Check | `check_patch(prefix)`, below |
@@ -660,7 +660,8 @@ shared by every base. The Vite clone is mounted read-only at `/repo`.
 - **`discard(fix)`** removes the base. A base is 2–3 GB of `node_modules` and
   `dist`; the first full harness run kept them all, filled the host disk and
   wedged Docker. Now each issue's base is discarded once that issue is done,
-  so about one exists at a time, and `prepare` rebuilds it from the shared
+  so with `--workers 1` (as the run used) about one exists at a time (with the
+  default 4 workers, up to about `workers` bases), and `prepare` rebuilds it from the shared
   store if it is needed again. A Docker failure here raises, since a base left
   behind is the disk problem itself.
 - **Status, exactly one of four.** `classify` returns `timeout` (the
@@ -776,6 +777,8 @@ migration.
   lack of an abstain matters for issues that aren't about code.
 
 ## Where the next phases attach
+
+Phase 07 should also tighten the test-container sandbox: mount only `/work/<issue>` and no `/store` for test runs, run non-root, and add `--pids-limit`. Today it has network none, 4 CPUs, 4 GB and a 300 s timeout, but the shared volumes are mounted read-write as root.
 
 | Phase | Attaches at |
 |---|---|

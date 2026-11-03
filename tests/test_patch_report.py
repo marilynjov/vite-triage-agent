@@ -31,10 +31,12 @@ def test_by_source_outcome_and_fault_hit():
     recs = [rec(1, src="hit", hit=True), rec(2, src="hit", hit=False, outcome="test_fail"),
             rec(3, src="hit", hit=None, outcome="test_fail"), rec(4, src="locate_miss", hit=None, outcome="test_fail")]
     s = summarize(recs, {})
-    assert s["by_source_outcome"]["hit"] == {"n": 3, "pass": 1}
-    assert s["by_source_outcome"]["locate_miss"] == {"n": 1, "pass": 0}
-    assert s["by_fault_hit"] == {True: {"n": 1, "pass": 1}, False: {"n": 1, "pass": 0},
-                                 None: {"n": 1, "pass": 0}}
+    def np(d):
+        return {"n": d["n"], "pass": d["pass"]}
+    assert np(s["by_source_outcome"]["hit"]) == {"n": 3, "pass": 1}
+    assert np(s["by_source_outcome"]["locate_miss"]) == {"n": 1, "pass": 0}
+    assert {k: np(v) for k, v in s["by_fault_hit"].items()} == {
+        True: {"n": 1, "pass": 1}, False: {"n": 1, "pass": 0}, None: {"n": 1, "pass": 0}}
 
 
 def test_superseded_api_record_uses_retry_and_spend_counts_both():
@@ -65,7 +67,8 @@ def test_final_api_and_unexpected_errors_excluded_and_counted():
     assert s["patchable_pass_rate"] == 1.0
     assert abs(s["cost_per_patch"] - 0.6) < 1e-9
     assert abs(s["cost_per_pass"] - 0.6) < 1e-9
-    assert s["by_source_outcome"] == {"hit": {"n": 1, "pass": 1}}
+    assert list(s["by_source_outcome"]) == ["hit"]
+    assert (s["by_source_outcome"]["hit"]["n"], s["by_source_outcome"]["hit"]["pass"]) == (1, 1)
 
 
 def test_cost_per_pass_none_without_passes():
@@ -85,3 +88,12 @@ def test_empty_records():
     s = summarize([], {})
     assert s["outcomes"] == {} and s["patchable_pass_rate"] is None
     assert s["cost_per_patch"] is None and s["cost_per_pass"] is None
+
+
+def test_by_source_counts_stale_and_patchable():
+    recs = [rec(1, outcome="pass", src="hypothesize_miss", hit=None),
+            rec(2, outcome="stale_path", src="hypothesize_miss", hit=None, cost=0.0),
+            rec(3, outcome="test_fail", src="hypothesize_miss", hit=None)]
+    d = summarize(recs, {})["by_source_outcome"]["hypothesize_miss"]
+    assert (d["n"], d["stale"], d["patchable"], d["pass"]) == (3, 1, 2, 1)
+    assert d["pass_rate"] == 0.5

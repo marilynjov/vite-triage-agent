@@ -160,4 +160,5 @@ def test_at_rev_reads_the_older_tree_and_restores():
 
 def test_file_length_follows_the_revision():
     with tools.at_rev(_old()):
-        assert tools.file_length(CSS) != 3685
+        n = tools.file_length(CSS)
+        assert isinstance(n, int) and n != 3685
