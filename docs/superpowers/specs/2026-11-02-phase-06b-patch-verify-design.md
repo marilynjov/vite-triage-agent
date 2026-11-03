@@ -19,22 +19,23 @@ fix, and how often does a wrong one pass anyway?**
 | Decision | Choice | Why |
 |---|---|---|
 | What verify proves | Fail-to-pass on the real fix's own unit tests | The only check that shows the bug is fixed. A regression-only check passes a no-op patch. |
-| Rows | Issues whose fix changed a file under `__tests__/`: 23 of the 40-row slice; 22 of them have a stored 06a hypothesis | The other 16 have no tests to fail, and one has only playground tests (needs a browser). |
-| Patch input | Reuse the stored 06a hypotheses (`val-n40-r3.jsonl`, arm `staged`) | One model call per run (≈ $0.01) instead of re-running the pipeline (≈ $0.03) plus a retrieval index per pre-fix checkout. |
-| Stale hypotheses | Recorded as `stale_path`, no model call | 06a read the 2026 pin; 9 of the 41 reusable hypotheses name a file absent before the 2023 fix. The count measures how much the pin warped 06a. |
+| Rows | Every val issue whose fix changed a file under `packages/vite/src/**/__tests__/`: 43 of 206 | Only 9 of the 40-row slice qualify (8 with a stored hypothesis), too few to separate anything. `playground/**/__tests__` are browser e2e tests and do not count. |
+| Patch input | 06a staged hypotheses: the stored ones in `val-n40-r3.jsonl`, plus one new staged run (at the pin, unchanged pipeline) for each harness-valid issue outside the slice | Reuses the 06a pipeline as built; re-running it on pre-fix code would need a retrieval index per checkout. |
+| Stale hypotheses | Recorded as `stale_path`, no model call | 06a reads the 2026 pin; on the slice, 9 of 41 hypotheses name a file absent before their 2023 fix. The count measures how much the pin warps 06a. |
 | Feedback | One attempt, graded blind | The gold tests are the answer key; showing their output to the model would leak it. |
 | Where tests run | Docker | 2023 checkouts pin `pnpm@8.6.7` and Node ≤ 20; the host has Node 23. The test run executes model-written code, so it runs with no network. Matches roadmap p6d. |
-| Budget | ≤ $0.60 lifetime on the patch run file | ≈ 32 calls at ≈ $0.01, with headroom; the smoke test measures the real figure. |
+| Budget | ≤ $0.75 lifetime on the new staged run file, ≤ $0.55 on the patch run file (≤ $1.30 total) | ≈ 34 staged runs at ≈ $0.019 and ≈ 45 patches at ≈ $0.01; only harness-valid issues are paid for; the smoke test measures the real figures. |
 
 ## 1. Harness validation (no model calls)
 
-`eval/verify_harness.py`, run once per candidate issue; results cached in
+`eval/verify_harness.py`, run once per candidate issue (all 43, before any spend); results cached in
 gitignored `data/verify_harness.jsonl`.
 
 1. **Fix commit:** the row's commit in `data/raw/commits.jsonl` (as
    `eval/gold_regions.py` finds it). **Pre-fix commit:** its first parent.
-   **Gold tests:** the fix's changed files whose path contains `/__tests__/`,
-   taken whole at the fix commit. **Fix source:** the fix's other changed files
+   **Gold tests:** the fix's added or modified files under
+   `packages/vite/src/**/__tests__/` (specs, snapshots, fixtures), taken whole
+   at the fix commit; the files run are the `*.spec.ts` / `*.test.ts` among them. **Fix source:** the fix's other changed files
    under `packages/vite/src`.
 2. **Prepare** (network on): in the container, check out the pre-fix commit
    into a per-issue directory under a Docker volume, enable corepack, and run
@@ -104,21 +105,27 @@ runs the gold tests under the container limits above. It returns `passed`,
 | `test_fail` | the edits applied but the gold tests failed or timed out |
 | `pass` | the gold tests passed |
 
-**The run** (`eval/patch_eval.py`): reads the arm-`staged` records in
-`data/runs/val-n40-r3.jsonl` that have a hypothesis and whose issue passed §1,
+**New staged runs:** `eval/ablation.py` gains `--issues <file of ids>`, which
+restricts the rows to those ids (still sorted by issue). The harness-valid
+issues outside the 40-row slice run once through the `staged` arm into
+`data/runs/val-unit-staged-r1.jsonl` with `--max-dollars 0.75`.
+
+**The run** (`eval/patch_eval.py`): reads the arm-`staged` records with a
+hypothesis from both staged files, keeps those whose issue passed §1,
 and writes one record per source record to `data/runs/val-n40-patch.jsonl`.
 Each record carries: `issue`, `repeat`, the source record's `outcome` and
 `fault_hit`, `prefix_sha`, `patch` (the `PatchResult` or null), `diff`,
 `verify`, `outcome`, `cost_usd`, `turns` and `error`. It resumes on
 `(issue, repeat)` and refuses to start past `--max-dollars` (lifetime per file,
-default 0.60), like `eval/ablation.py`.
+default 0.55), like `eval/ablation.py`.
 
-1. Smoke test: `--issues <2 ids>`. Measure cost per patch.
-2. Full run over every eligible record.
+1. Harness over all 43 issues (free). Stop and decide if fewer than 15 are valid.
+2. Smoke test: 2 new staged runs, then 2 patches. Measure cost per run and per patch.
+3. The new staged runs, then the full patch run.
 
 **The report** (`eval/patch_report.py`):
-- the outcome table: count and share of each outcome, with min–max across the
-  two repeats
+- the outcome table: count and share of each outcome, with min–max across
+  repeats (2 per slice issue, 1 per new issue)
 - pass rate over patchable runs (`patch_error` + `test_fail` + `pass`)
 - pass rate by the source 06a outcome, and by `fault_hit` among `hit`s
 - cost per patch and per pass
@@ -140,7 +147,9 @@ default 0.60), like `eval/ablation.py`.
 - **`tests/test_patch_report.py`:** the outcome table, rates and the
   by-source-outcome split on hand-made records.
 - **`tests/test_verify_docker.py`** (marker `docker`, skipped by default):
-  issue #13907's real fix (`c89f677`) passes verify, and the empty patch fails.
+  issue #14515's real fix (`72f6a52`, one source file plus `css.spec.ts`)
+  passes verify, and the empty patch fails.
+- **`tests/test_ablation.py` addition:** `--issues` restricts the rows.
 
 ## 5. Docs
 
@@ -156,7 +165,7 @@ default 0.60), like `eval/ablation.py`.
 - Retries driven by test output (leaks the answer key).
 - Re-running locate/understand/hypothesize on the pre-fix code (option B in
   conversation; would need a retrieval index per checkout).
-- Playground tests, and the issues whose fixes have no tests.
+- Playground tests, and the issues whose fixes have no unit tests (163 of 206).
 - Running the full existing suite as a regression check.
 - The UI (Piece C).
 
@@ -164,11 +173,11 @@ default 0.60), like `eval/ablation.py`.
 
 - **2023 installs may not reproduce.** A lockfile can name packages that are
   gone or need native builds. §1 runs before any spend and reports how many
-  issues survive. If fewer than ~12 survive, stop and decide before paying.
+  issues survive. If fewer than 15 survive, stop and decide before paying.
 - **Some gold tests may not fail without the fix** (the fix changed a test for
   other reasons). §1 excludes them as `passes_without_fix`.
 - **Docker memory is 8 GB.** Installs run one at a time; vitest is limited to
   4 GB.
-- **~32 patches is small,** and the by-outcome split is smaller still. The
+- **~45 patches is small,** and the by-outcome split is smaller still. The
   report gives counts beside shares, and the write-up says what the sample
   cannot separate.
