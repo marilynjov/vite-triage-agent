@@ -62,10 +62,14 @@ def load_harness() -> dict[int, dict]:
     if not path.exists():
         return {}
     out = {}
-    for line in path.read_text().splitlines():
-        if line.strip():
+    for n, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
             rec = json.loads(line)
             out[rec["issue"]] = rec  # a later record supersedes an earlier one
+        except (json.JSONDecodeError, KeyError, TypeError):
+            print(f"verify_harness: skipping unreadable line {n} of {path}", file=sys.stderr)
     return out
 
 
@@ -83,7 +87,15 @@ def load_commits() -> list[dict]:
 
 def _append(rec: dict) -> None:
     DATA.mkdir(parents=True, exist_ok=True)
-    with open(_path(), "a") as f:
+    path = _path()
+    torn = False
+    if path.exists() and path.stat().st_size:
+        with open(path, "rb") as f:
+            f.seek(-1, 2)
+            torn = f.read(1) != b"\n"
+    with open(path, "a") as f:
+        if torn:
+            f.write("\n")
         f.write(json.dumps(rec) + "\n")
         f.flush()
 
@@ -104,7 +116,12 @@ def main(argv: list[str] | None = None) -> None:
             fixes.append(fix)
 
     cached = load_harness()
-    todo = [f for f in fixes if f.issue not in cached]
+    def hit(f: Fix) -> bool:
+        r = cached.get(f.issue)
+        return bool(r) and r.get("reason") != "infra_error" and \
+            (r.get("prefix_sha"), r.get("fix_sha")) == (f.prefix_sha, f.fix_sha)
+
+    todo = [f for f in fixes if not hit(f)]
     if todo:
         ensure_image()
     for fix in todo:

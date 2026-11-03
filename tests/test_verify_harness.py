@@ -76,10 +76,12 @@ def test_valid_and_call_arguments():
 def test_main_skips_cached(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(vh, "DATA", tmp_path)
     (tmp_path / "verify_harness.jsonl").write_text(
-        json.dumps({"issue": 7, "valid": True, "reason": None, "seconds": 2}) + "\n")
+        json.dumps({"issue": 7, "valid": True, "reason": None, "seconds": 2,
+                                "prefix_sha": "p", "fix_sha": "f"}) + "\n")
     monkeypatch.setattr(vh, "candidate_rows", lambda: [{"issue": 7}, {"issue": 8}])
     monkeypatch.setattr(vh, "load_commits", lambda: [])
     monkeypatch.setattr(vh, "fix_for", lambda row, commits: Fix(row["issue"], "f", "p", (), (), (), ()))
+    monkeypatch.setattr(vh, "ensure_image", lambda: None)
     seen = []
 
     def fake_validate(fix, **kw):
@@ -93,3 +95,68 @@ def test_main_skips_cached(tmp_path, monkeypatch, capsys):
     assert set(vh.load_harness()) == {7, 8}
     assert (tmp_path / "verify_valid.txt").read_text().split() == ["7"]
     assert (tmp_path / "verify_valid_new.txt").read_text().split() == []
+
+
+def _setup(monkeypatch, tmp_path, cached, validate_fn):
+    monkeypatch.setattr(vh, "DATA", tmp_path)
+    if cached is not None:
+        (tmp_path / "verify_harness.jsonl").write_text(cached)
+    monkeypatch.setattr(vh, "candidate_rows", lambda: [{"issue": 7}])
+    monkeypatch.setattr(vh, "load_commits", lambda: [])
+    monkeypatch.setattr(vh, "fix_for", lambda row, commits: Fix(7, "f", "p", (), (), (), ()))
+    monkeypatch.setattr(vh, "ensure_image", lambda: None)
+    monkeypatch.setattr(vh, "baseline_ids", lambda: set())
+    monkeypatch.setattr(vh, "validate", validate_fn)
+
+
+def _ok(fix, **kw):
+    return {"issue": 7, "valid": True, "reason": None, "seconds": 1,
+            "prefix_sha": "p", "fix_sha": "f"}
+
+
+def _rec(**kw):
+    base = {"issue": 7, "valid": False, "reason": None, "seconds": 1,
+            "prefix_sha": "p", "fix_sha": "f"}
+    return json.dumps({**base, **kw}) + "\n"
+
+
+def test_torn_line_skipped_and_next_append_on_new_line(tmp_path, monkeypatch, capsys):
+    _setup(monkeypatch, tmp_path, _rec(issue=3, valid=True) + '{"issue": 9, "val', _ok)
+    assert set(vh.load_harness()) == {3}
+    vh.main([])
+    lines = (tmp_path / "verify_harness.jsonl").read_text().splitlines()
+    assert json.loads(lines[-1])["issue"] == 7
+    assert set(vh.load_harness()) == {3, 7}
+
+
+def test_cached_infra_error_is_revalidated(tmp_path, monkeypatch):
+    seen = []
+    _setup(monkeypatch, tmp_path, _rec(reason="infra_error"),
+           lambda fix, **kw: seen.append(1) or _ok(fix))
+    vh.main([])
+    assert seen and vh.load_harness()[7]["valid"]
+
+
+def test_cached_timeout_is_kept(tmp_path, monkeypatch):
+    seen = []
+    _setup(monkeypatch, tmp_path, _rec(reason="timeout"),
+           lambda fix, **kw: seen.append(1) or _ok(fix))
+    vh.main([])
+    assert not seen
+
+
+def test_sha_mismatch_is_revalidated(tmp_path, monkeypatch):
+    seen = []
+    _setup(monkeypatch, tmp_path, _rec(valid=True, fix_sha="old"),
+           lambda fix, **kw: seen.append(1) or _ok(fix))
+    vh.main([])
+    assert seen
+
+
+def test_exception_recorded_as_infra_error(tmp_path, monkeypatch):
+    def boom(fix, **kw):
+        raise RuntimeError("docker died")
+    _setup(monkeypatch, tmp_path, None, boom)
+    vh.main([])
+    rec = vh.load_harness()[7]
+    assert rec["reason"] == "infra_error" and "docker died" in rec["fail_tail"]
