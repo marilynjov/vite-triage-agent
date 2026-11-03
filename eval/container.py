@@ -12,6 +12,7 @@ Callers hold LOCK around `run_tests`: runs on one base must not overlap.
 from __future__ import annotations
 
 import io
+import re
 import shlex
 import subprocess
 import tarfile
@@ -43,6 +44,26 @@ class TestRun:
     seconds: float
     tail: str
     timed_out: bool
+    status: str  # STATUSES
+
+
+STATUSES = ("pass", "test_fail", "timeout", "infra")
+# vitest's summary line when at least one test file failed (to load or to pass).
+_FAILED_FILES = re.compile(r"^\s*Test Files\s+.*\b\d+ failed", re.M)
+
+
+def classify(exit_code: int, output: str, timed_out: bool, oom: bool) -> str:
+    """"test_fail" only when vitest ran and reported failed test files; any other
+    nonzero exit (docker, git, tar, OOM, no tests found, missing base) is "infra"."""
+    if oom:
+        return "infra"
+    if timed_out:
+        return "timeout"
+    if exit_code == 0:
+        return "pass"
+    if exit_code == 1 and _FAILED_FILES.search(output) and "No test files found" not in output:
+        return "test_fail"
+    return "infra"
 
 
 def _docker(*args: str, input: bytes | None = None, timeout: float = 120) -> subprocess.CompletedProcess:
@@ -66,8 +87,8 @@ def ensure_image() -> None:
         raise RuntimeError(f"docker build {IMAGE} failed:\n{_tail(_text(r))}")
 
 
-def _run_args(name: str, *extra: str) -> list[str]:
-    return ["run", "--rm", "--name", name,
+def _run_args(name: str, *extra: str, rm: bool = True) -> list[str]:
+    return ["run", *(["--rm"] if rm else []), "--name", name,
             "-v", f"{WORK_VOLUME}:/work", "-v", f"{STORE_VOLUME}:/store",
             "-v", f"{M.REPO_PATH}:/repo:ro",
             "-e", "COREPACK_HOME=/store/corepack", "-e", "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
@@ -82,36 +103,44 @@ def _kill(name: str) -> None:
     _docker("kill", name, timeout=60)
 
 
-def prepare(fix: Fix) -> tuple[bool, str]:
-    """Build /work/<issue> at the pre-fix commit and install it, unless already ready."""
-    d = f"/work/{fix.issue}"
-    script = f"""
-set -e
+INSTALL = "pnpm install --frozen-lockfile --store-dir /store/pnpm"
+# vitest loads the workspace's vite from its dist; Vite's own CI builds before `test-unit`.
+BUILD = "pnpm --filter ./packages/vite run build-bundle"
+
+
+def _prepare_script(fix: Fix, *, work: str = "/work", repo: str = "/repo",
+                    install: str = INSTALL, build: str = BUILD) -> str:
+    """Every step ends in `|| fail`: `set -e` is unreliable inside conditions and
+    dash has no pipefail, so the archive is written to a file and checked, not piped."""
+    d = shlex.quote(f"{work}/{fix.issue}")
+    return f"""
 d={d}
 if [ -f "$d/.ready" ]; then echo "base ready: $d"; exit 0; fi
-rm -rf "$d"
-if ! (
-  set -e
-  mkdir -p "$d" && cd "$d"
-  git -C /repo archive {shlex.quote(fix.prefix_sha)} | tar -x
-  git init -q
-  echo .ready >> .git/info/exclude
-  git add -A
-  git -c user.name=verify -c user.email=verify@localhost commit -qm base --no-verify
-  pnpm --version
-  pnpm install --frozen-lockfile --store-dir /store/pnpm
-  pnpm --filter ./packages/vite run build-bundle
-); then
-  rm -rf "$d"
-  echo "prepare failed: removed $d"
-  exit 1
-fi
-touch "$d/.ready"
+fail() {{ echo "prepare failed at $1: removed $d"; cd /; rm -rf "$d" "$d.tar"; exit 1; }}
+rm -rf "$d" "$d.tar"
+mkdir -p "$d" || fail mkdir
+cd "$d" || fail cd
+git -C {shlex.quote(repo)} archive -o "$d.tar" {shlex.quote(fix.prefix_sha)} || fail archive
+tar -xf "$d.tar" || fail extract
+rm -f "$d.tar"
+git init -q || fail git-init
+echo .ready >> .git/info/exclude || fail exclude
+git add -A || fail git-add
+git -c user.name=verify -c user.email=verify@localhost -c commit.gpgsign=false \
+  commit -qm base --no-verify || fail git-commit
+pnpm --version || fail pnpm-version
+{install} || fail install
+{build} || fail build
+touch .ready || fail ready
 echo "base ready: $d"
 """
+
+
+def prepare(fix: Fix) -> tuple[bool, str]:
+    """Build /work/<issue> at the pre-fix commit, install and bundle it, unless already ready."""
     name = _name(fix, "prepare")
     try:
-        r = _docker(*_run_args(name), "sh", "-c", script, timeout=PREPARE_TIMEOUT)
+        r = _docker(*_run_args(name), "sh", "-c", _prepare_script(fix), timeout=PREPARE_TIMEOUT)
     except subprocess.TimeoutExpired:
         _kill(name)
         return False, f"prepare timed out after {PREPARE_TIMEOUT}s"
@@ -146,16 +175,22 @@ set +e
 timeout -k {KILL_GRACE} {int(timeout)} pnpm exec vitest run {tests}
 """
     name = _name(fix, "test")
-    args = _run_args(name, "-i", "--network", "none", "--cpus", "4", "--memory", "4g")
+    args = _run_args(name, "-i", "--network", "none", "--cpus", "4", "--memory", "4g", rm=False)
     start = time.monotonic()
     try:
-        r = _docker(*args, "sh", "-c", script, input=_tar(files),
-                    timeout=timeout + KILL_GRACE + DOCKER_SLACK)
-    except subprocess.TimeoutExpired as e:
-        _kill(name)
-        out = (e.stdout or b"").decode("utf-8", errors="replace")
-        return TestRun(-1, time.monotonic() - start, _tail(out), True)
-    seconds = time.monotonic() - start
-    # 124: `timeout` sent TERM; 137 after the full wait: it had to KILL.
-    timed_out = r.returncode == 124 or (r.returncode == 137 and seconds >= timeout)
-    return TestRun(r.returncode, seconds, _tail(_text(r)), timed_out)
+        try:
+            r = _docker(*args, "sh", "-c", script, input=_tar(files),
+                        timeout=timeout + KILL_GRACE + DOCKER_SLACK)
+        except subprocess.TimeoutExpired as e:
+            _kill(name)
+            out = (e.stdout or b"").decode("utf-8", errors="replace")
+            return TestRun(-1, time.monotonic() - start, _tail(out), True, "timeout")
+        seconds = time.monotonic() - start
+        oom = _text(_docker("inspect", "-f", "{{.State.OOMKilled}}", name)).strip() == "true"
+    finally:
+        _docker("rm", "-f", name, timeout=60)
+    out = _text(r)
+    # 124: `timeout` sent TERM; 137 after the full wait without OOM: it had to KILL.
+    timed_out = r.returncode == 124 or (r.returncode == 137 and seconds >= timeout and not oom)
+    return TestRun(r.returncode, seconds, _tail(out),
+                   timed_out, classify(r.returncode, out, timed_out, oom))

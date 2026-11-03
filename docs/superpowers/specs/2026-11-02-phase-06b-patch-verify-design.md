@@ -37,14 +37,19 @@ gitignored `data/verify_harness.jsonl`.
    `packages/vite/src/**/__tests__/` (specs, snapshots, fixtures), taken whole
    at the fix commit; the files run are the `*.spec.ts` / `*.test.ts` among them. **Fix source:** the fix's other changed files
    under `packages/vite/src`.
-2. **Prepare** (network on): in the container, check out the pre-fix commit
-   into a per-issue directory under a Docker volume, enable corepack, and run
-   `pnpm install --frozen-lockfile` against a shared pnpm store volume. This
+2. **Prepare** (network on): in the container, export the pre-fix commit
+   into a per-issue directory under a Docker volume and commit it to a fresh
+   git repo (so it can be reset), run `pnpm install --frozen-lockfile` against a
+   shared pnpm store volume (corepack enabled), then
+   `pnpm --filter ./packages/vite run build-bundle`: vitest loads the workspace's
+   `vite` from its `dist`, as Vite's own CI builds before `test-unit`. Any failed
+   step removes the directory; `.ready` is written only after all succeed. This
    checkout is the cached base for every later verify of the issue.
-3. **Fail check** (network off): copy of the base + gold tests →
-   `pnpm exec vitest run <gold tests>` must exit nonzero.
-4. **Pass check** (network off): copy of the base + gold tests + fix source at
-   the fix commit → the same command must exit zero.
+3. **Fail check** (network off): the base, reset, + gold tests →
+   `pnpm exec vitest run <gold tests>` must exit nonzero with vitest reporting
+   failed tests (status `test_fail`, not `infra`).
+4. **Pass check** (network off): the base, reset, + gold tests + fix source at
+   the fix commit (and the fix's deletions) → the same command must exit zero.
 
 Anything else is `harness_invalid` with a reason (`install_failed`,
 `passes_without_fix`, `fails_with_fix`, `timeout`). Those issues are excluded
@@ -93,10 +98,13 @@ viewer.
 
 ## 3. Verify, the run, the report
 
-**Verify** (`eval/verify.py`): `verify(issue, edits) -> VerifyResult` makes a
-copy of the issue's base, writes the edited files, copies in the gold tests and
+**Verify** (`eval/verify.py`): `verify(issue, edits) -> VerifyResult` resets
+the issue's base, writes the edited files, copies in the gold tests and
 runs the gold tests under the container limits above. It returns `passed`,
-`exit_code`, `seconds` and the output tail (last 4 KB).
+`exit_code`, `seconds`, the output tail (last 4 KB) and `status`, one of
+`pass`, `test_fail` (vitest ran and reported failed test files), `timeout` or
+`infra` (anything else: Docker, reset, OOM, no tests found, missing base);
+`infra` is never counted as a test failure.
 
 **Outcome per run**, exactly one:
 

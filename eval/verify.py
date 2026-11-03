@@ -16,6 +16,7 @@ class VerifyResult:
     seconds: float
     tail: str
     timed_out: bool
+    status: str  # container.STATUSES; "infra" is never a test failure
 
 
 def verify(fix: Fix, edits: list[Edit]) -> VerifyResult:
@@ -24,5 +25,5 @@ def verify(fix: Fix, edits: list[Edit]) -> VerifyResult:
              **{p: file_at(fix.fix_sha, p) for p in fix.gold_tests}}
     with container.LOCK:
         run = container.run_tests(fix, files)
-    return VerifyResult(run.exit_code == 0 and not run.timed_out, run.exit_code,
-                        run.seconds, run.tail, run.timed_out)
+    return VerifyResult(run.status == "pass", run.exit_code, run.seconds, run.tail,
+                        run.timed_out, run.status)
