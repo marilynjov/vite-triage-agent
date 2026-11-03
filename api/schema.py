@@ -129,6 +129,26 @@ class UnderstandResult(BaseModel):
                                   json_schema_extra={"maxItems": UNDERSTAND_MAX_REGIONS})
 
 
+PATCH_MAX_EDITS = 5
+
+
+class Edit(BaseModel):
+    """One search/replace: `old` must occur exactly once in `path` at the pre-fix tree."""
+
+    model_config = {"extra": "forbid"}
+
+    path: str
+    old: str
+    new: str
+
+
+class PatchResult(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    reasoning: str
+    edits: list[Edit] = Field(min_length=1, json_schema_extra={"maxItems": PATCH_MAX_EDITS})
+
+
 class Fault(BaseModel):
     model_config = {"extra": "forbid"}
 

@@ -7,12 +7,13 @@ raise only when nothing valid is left or a line range is out of bounds.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 import mining.config as M
 from agent import tools
-from api.schema import (LOCATE_MAX_FILES, UNDERSTAND_MAX_REGIONS, HypothesisResult,
-                        LocateResult, UnderstandResult)
+from api.schema import (LOCATE_MAX_FILES, PATCH_MAX_EDITS, UNDERSTAND_MAX_REGIONS, HypothesisResult,
+                        LocateResult, PatchResult, UnderstandResult)
 from api.triage import STRUCTURED_SYSTEM
 
 
@@ -94,6 +95,36 @@ def check_hypothesis(located: LocateResult,
     return check
 
 
+def check_patch(rev: str) -> Callable[[PatchResult], None]:
+    """Every edit must name a source file at `rev`, with `old` occurring exactly once and
+    no two edits overlapping. Raises; never prunes, since a dropped edit changes the patch."""
+    def check(result: PatchResult) -> None:
+        if len(result.edits) > PATCH_MAX_EDITS:
+            raise ValueError(f"patch: {len(result.edits)} edits, at most {PATCH_MAX_EDITS}")
+        spans: dict[str, list[tuple[int, int]]] = {}
+        for e in result.edits:
+            e.path = e.path.removeprefix("./")
+            if not M.is_gold_candidate(e.path):
+                raise ValueError(f"patch: {e.path} is not an editable source file")
+            r = tools._git("show", f"{rev}:{e.path}")
+            if r.returncode != 0:
+                raise ValueError(f"patch: no such file {e.path} at the pre-fix tree")
+            if not e.old:
+                raise ValueError(f"patch: empty `old` for {e.path}")
+            n = r.stdout.count(e.old)
+            if n != 1:
+                raise ValueError(
+                    f"patch: `old` occurs {n} times in {e.path}, must be exactly once "
+                    f"(copy it exactly, without the 'N: ' line prefixes): {e.old[:80]!r}")
+            start = r.stdout.index(e.old)
+            span = (start, start + len(e.old))
+            for s0, s1 in spans.setdefault(e.path, []):
+                if span[0] < s1 and s0 < span[1]:
+                    raise ValueError(f"patch: edits to {e.path} overlap")
+            spans[e.path].append(span)
+    return check
+
+
 # ---- prompts and tools ----------------------------------------------------
 
 _TOOLS_NOTE = """
@@ -147,9 +178,22 @@ other triage fields. Use paths exactly as given, claim nothing beyond the
 regions you were shown, and do not claim to have read anything else.
 """
 
+PATCH_SYSTEM = """\
+You are the patch stage of triaging an issue for the Vite repository. Your single
+job: given the fault an earlier stage found (file, lines, mechanism), write the
+smallest change that fixes it, as search/replace edits. The code you can read is
+the code as it was before the fix; the fault's line numbers come from newer code,
+so they may be off. Find the real spot by reading the file first and use the
+mechanism to guide you. Each edit gives `path`, `old` and `new`: `old` must occur
+exactly once in that file, and edits must not overlap. Copy `old` exactly from
+`read_file` output, WITHOUT the leading "N: " line-number prefixes, keeping
+indentation. Never edit tests. At most five edits; change as little as you can.
+""" + _TOOLS_NOTE + _EVIDENCE
+
 LOCATE_TOOLS = tools.TOOL_SPECS
 UNDERSTAND_TOOLS = [t for t in tools.TOOL_SPECS if t["name"] in ("read_file", "grep")]
 HYPOTHESIZE_TOOLS: list[dict] = []
+PATCH_TOOLS = [t for t in tools.TOOL_SPECS if t["name"] in ("read_file", "grep", "list_dir")]
 
 
 def understand_prompt(title: str, body: str, located: LocateResult) -> str:
@@ -163,3 +207,10 @@ def hypothesize_prompt(title: str, body: str, located: LocateResult,
     return (f"Title: {title}\n\n{body}\n\n---\n\nLocated files:\n\n"
             f"{located.model_dump_json(indent=2)}\n\n---\n\nUnderstood regions:\n\n"
             f"{understood.model_dump_json(indent=2)}")
+
+
+def patch_prompt(title: str, body: str, hypothesis: dict) -> str:
+    return (f"Title: {title}\n\n{body}\n\n---\n\nThe fault found by the earlier stages "
+            "(line numbers come from newer code than the tree you can read, so they may "
+            "be off; verify against the file):\n\n"
+            f"{json.dumps(hypothesis, indent=2)}")
