@@ -164,9 +164,54 @@ def test_run_error_caused_by_api_error_is_api():
     assert r["cost_usd"] == pytest.approx(0.01)
 
 
-def test_other_exception_is_an_unexpected_infra_not_a_crash():
+def test_other_exception_is_unexpected_and_not_retried():
     r = rec(Fakes(exc=ValueError("boom")))
-    assert r["outcome"] is None and r["error_kind"] == "api" and "boom" in r["error"]
+    assert r["outcome"] is None and r["error_kind"] == "unexpected" and "boom" in r["error"]
+    assert patch_eval.done_keys([r]) == {(7, 0)}
+
+
+def test_exception_carrying_a_run_keeps_its_cost():
+    e = ValueError("boom")
+    e.run = Run(result=None, turns=[NS(cost_usd=Decimal("0.04"))], trace=[])
+    r = rec(Fakes(exc=e))
+    assert r["error_kind"] == "unexpected" and r["cost_usd"] == pytest.approx(0.04)
+
+
+def test_failure_after_the_paid_call_keeps_cost_and_is_unexpected(monkeypatch):
+    def bad(edits, rev):
+        raise RuntimeError("git broke")
+    monkeypatch.setattr(patch_eval, "patch_to_diff", bad)
+    f = Fakes()
+    r = rec(f)
+    assert r["error_kind"] == "unexpected" and r["cost_usd"] == pytest.approx(0.02)
+    assert not f.verify_calls
+
+
+def test_infra_record_with_patch_is_reverified_without_a_model_call():
+    first = rec(Fakes(status="infra"))
+    assert first["error_kind"] == "infra" and first["patch"]
+    f = Fakes()
+    r = patch_eval.make_patch_record(job(prior=first), patch_fn=f.patch_fn,
+                                     verify_fn=f.verify_fn)
+    assert not f.patch_calls
+    assert r["outcome"] == "pass" and r["cost_usd"] == 0.0
+    assert r["reverified_from_infra"] is True
+    assert r["patch"] == first["patch"] and r["diff"] == first["diff"]
+    assert r["turns"] == first["turns"]
+    assert f.verify_calls[0][1] == PATCH.edits
+
+
+def test_infra_priors_only_keep_infra_records_with_edits():
+    with_patch = rec(Fakes(status="infra"))
+    no_patch = {"issue": 8, "repeat": 0, "error_kind": "infra", "patch": None}
+    api = {"issue": 9, "repeat": 0, "error_kind": "api", "patch": None}
+    assert patch_eval.infra_priors([with_patch, no_patch, api]) == {(7, 0): with_patch}
+
+
+def test_lifetime_spend_counts_a_paid_patch_once():
+    first = rec(Fakes(status="infra"))
+    again = patch_eval.make_patch_record(job(prior=first), verify_fn=Fakes().verify_fn)
+    assert sum(r["cost_usd"] for r in (first, again)) == pytest.approx(0.02)
 
 
 # --- eligible -------------------------------------------------------------
@@ -184,9 +229,23 @@ def test_eligible_drops_invalid_hypothesisless_and_other_arms():
     assert jobs[0].fix is FIX and jobs[0].row is ROWS[7]
 
 
-def test_eligible_raises_on_duplicate_key():
+def test_eligible_raises_on_a_key_in_two_files():
     with pytest.raises(ValueError, match="duplicate"):
-        patch_eval.eligible([src(7), src(7)], HARNESS, ROWS, FIXES)
+        patch_eval.eligible([src(7, _src="a"), src(7, _src="b")], HARNESS, ROWS, FIXES)
+
+
+def test_eligible_drops_api_errored_staged_records_before_the_duplicate_check():
+    retry = [src(7, error_kind="api", stages={"hypothesis": None}, _src="a"),
+             src(7, cost_usd=0.5, _src="a")]
+    jobs = patch_eval.eligible(retry, HARNESS, ROWS, FIXES)
+    assert [(j.issue, j.repeat) for j in jobs] == [(7, 0)]
+    assert jobs[0].source["cost_usd"] == 0.5
+
+
+def test_eligible_keeps_the_last_of_a_repeated_key_in_one_file():
+    jobs = patch_eval.eligible([src(7, cost_usd=0.1, _src="a"), src(7, cost_usd=0.2, _src="a")],
+                               HARNESS, ROWS, FIXES)
+    assert len(jobs) == 1 and jobs[0].source["cost_usd"] == 0.2
 
 
 # --- the run --------------------------------------------------------------

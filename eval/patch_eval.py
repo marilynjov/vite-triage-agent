@@ -26,6 +26,7 @@ import anthropic
 from agent.loop import RunError
 from agent.patch import patch_to_diff, run_patch
 from api import config as C
+from api.schema import Edit
 from eval import container
 from eval.ablation import RUNS_DIR, load_records, val_rows
 from eval.fixes import Fix, _git, fix_for
@@ -45,6 +46,7 @@ class PatchJob(NamedTuple):
     row: dict
     source: dict
     fix: Fix
+    prior: dict | None = None  # an infra record with a stored patch: re-verify it, no model call
 
 
 def path_exists(sha: str, path: str) -> bool:
@@ -54,15 +56,19 @@ def path_exists(sha: str, path: str) -> bool:
 def eligible(staged: list[dict], harness: dict[int, dict], rows: dict[int, dict],
              fixes: dict[int, Fix]) -> list[PatchJob]:
     """Staged records with a hypothesis on a harness-valid issue, one job each."""
-    seen: set[tuple[int, int]] = set()
-    jobs = []
+    latest: dict[tuple[int, int], dict] = {}
     for r in staged:
-        if r.get("arm") != "staged":
+        # ablation appends a retry after an api-errored record: that one has no hypothesis
+        if r.get("arm") != "staged" or r.get("error_kind") == "api":
             continue
         key = (r["issue"], r["repeat"])
-        if key in seen:
-            raise ValueError(f"duplicate staged record for (issue, repeat) = {key}")
-        seen.add(key)
+        old = latest.get(key)
+        if old is not None and old.get("_src") != r.get("_src"):
+            raise ValueError(f"duplicate staged record for (issue, repeat) = {key} "
+                             f"in {old.get('_src')} and {r.get('_src')}")
+        latest[key] = r  # within one file, append order is age: the last wins
+    jobs = []
+    for r in latest.values():
         if not (r.get("stages") or {}).get("hypothesis"):
             continue
         if not harness.get(r["issue"], {}).get("valid"):
@@ -93,6 +99,12 @@ def done_keys(records: list[dict]) -> set[tuple[int, int]]:
             if r.get("error_kind") not in RETRY_KINDS}
 
 
+def infra_priors(records: list[dict]) -> dict[tuple[int, int], dict]:
+    """Per key, the newest infra record that kept its patch's edits."""
+    return {(r["issue"], r["repeat"]): r for r in records
+            if r.get("error_kind") == "infra" and ((r.get("patch") or {}).get("edits"))}
+
+
 def _cost(run) -> float:
     return float(run.cost_usd) if run is not None else 0.0
 
@@ -110,26 +122,35 @@ def make_patch_record(job: PatchJob, *, patch_fn=run_patch, verify_fn=verify) ->
         rec["outcome"] = "stale_path"
         return rec
     run = None
-    try:
-        run = patch_fn(row["title"], row["body"], hyp, fix.prefix_sha, row["created_at"])
-        rec["cost_usd"], rec["turns"] = _cost(run), len(run.turns)
-        rec["patch"] = run.result.model_dump(mode="json")
-        rec["diff"] = patch_to_diff(run.result.edits, fix.prefix_sha)
-    except RunError as exc:
-        part = getattr(exc, "run", None)
-        rec["cost_usd"], rec["turns"] = _cost(part), len(part.turns) if part else 0
-        rec["error"] = str(exc)
-        if isinstance(exc.__cause__, anthropic.APIError):
-            rec["error_kind"] = "api"
-        else:
-            rec["outcome"] = "patch_error"
-        return rec
-    except anthropic.APIError as exc:
-        rec.update(error=f"{type(exc).__name__}: {exc}", error_kind="api")
-        return rec
-    except Exception as exc:  # not the patch's fault, not a result: retry on resume
-        rec.update(error=f"{type(exc).__name__}: {exc}", error_kind="api")
-        return rec
+    if job.prior is not None:  # a paid patch whose verify hit infra: do not pay for it again
+        prior = job.prior
+        edits = [Edit(**e) for e in prior["patch"]["edits"]]
+        rec.update(patch=prior["patch"], diff=prior.get("diff"), turns=prior.get("turns", 0),
+                   reverified_from_infra=True)  # cost stays 0.0: the old record holds it
+    else:
+        try:
+            run = patch_fn(row["title"], row["body"], hyp, fix.prefix_sha, row["created_at"])
+            rec["cost_usd"], rec["turns"] = _cost(run), len(run.turns)
+            rec["patch"] = run.result.model_dump(mode="json")
+            rec["diff"] = patch_to_diff(run.result.edits, fix.prefix_sha)
+            edits = run.result.edits
+        except RunError as exc:
+            part = getattr(exc, "run", None)
+            rec["cost_usd"], rec["turns"] = _cost(part), len(part.turns) if part else 0
+            rec["error"] = str(exc)
+            if isinstance(exc.__cause__, anthropic.APIError):
+                rec["error_kind"] = "api"
+            else:
+                rec["outcome"] = "patch_error"
+            return rec
+        except Exception as exc:
+            # API errors retry; anything else is a bug that retrying would only re-pay for
+            part = getattr(exc, "run", None) or run
+            if part is not None:
+                rec["cost_usd"], rec["turns"] = _cost(part), len(part.turns)
+            rec.update(error=f"{type(exc).__name__}: {exc}",
+                       error_kind="api" if isinstance(exc, anthropic.APIError) else "unexpected")
+            return rec
 
     try:
         with container.LOCK:  # prepare is idempotent: a missing base is rebuilt
@@ -137,7 +158,7 @@ def make_patch_record(job: PatchJob, *, patch_fn=run_patch, verify_fn=verify) ->
             if not ok:
                 rec.update(error=f"prepare failed: {tail}", error_kind="infra")
                 return rec
-            res = verify_fn(fix, run.result.edits)
+            res = verify_fn(fix, edits)
     except Exception as exc:
         rec.update(error=f"{type(exc).__name__}: {exc}", error_kind="infra")
         return rec
@@ -200,8 +221,8 @@ def estimate_cost(jobs: list[PatchJob], records: list[dict]) -> float:
     paid = [r["cost_usd"] for r in records
             if r.get("error_kind") is None and r.get("outcome") != "stale_path"]
     unit = sum(paid) / len(paid) if paid else PRIOR_COST
-    live = [j for j in jobs
-            if path_exists(j.fix.prefix_sha, j.source["stages"]["hypothesis"]["fault"]["path"])]
+    live = [j for j in jobs  # a re-verify of a stored patch pays nothing
+            if j.prior is None and path_exists(j.fix.prefix_sha, j.source["stages"]["hypothesis"]["fault"]["path"])]
     return unit * len(live)
 
 
@@ -238,6 +259,8 @@ def main(argv: list[str] | None = None) -> None:
     existing = load_patch_records(OUT)
     done = done_keys(existing)
     jobs = [j for j in jobs if (j.issue, j.repeat) not in done]
+    prior = infra_priors(existing)
+    jobs = [j._replace(prior=prior.get((j.issue, j.repeat))) for j in jobs]
 
     estimate = estimate_cost(jobs, existing)
     spent_before = sum(r.get("cost_usd") or 0.0 for r in existing)
@@ -259,7 +282,7 @@ def main(argv: list[str] | None = None) -> None:
 def _load_staged(path: Path) -> list[dict]:
     if not Path(path).exists():
         return []
-    return load_records(path)
+    return [{**r, "_src": str(path)} for r in load_records(path)]
 
 
 if __name__ == "__main__":
