@@ -831,3 +831,167 @@ costs about four times as much. Its value here is the attribution, not the score
   $0.906, $1.53 in all against a $1.50 plan. The overrun of about $0.03 is
   jobs already in flight when the cap was reached, plus the smoke test, which
   ran in its own file.
+
+## Phase 06b — patch and verify (fail-to-pass, 2026-11-03)
+
+Piece A ends at a hypothesis: a fault (file, lines, mechanism) and ranked
+files. Piece B hands it to a **patch** stage (read_file, grep, list_dir; 6
+turns) that reads the code as it was before the fix and returns up to 5
+search/replace edits. **Verify** applies them in a container over the pre-fix
+tree and runs the unit tests the real fix added or changed. Those tests fail
+without the fix, so a pass means the patch fixes the reported behaviour, not
+only that it breaks nothing (fail-to-pass). One attempt per hypothesis, graded
+blind: the model never sees the test output.
+
+Rows: the 43 val issues whose fix changed a unit test under
+`packages/vite/src/**/__tests__/`, 9 of them in the 40-row slice. Hypotheses:
+the slice's stored 06a records (`data/runs/val-n40-r3.jsonl`, 2 repeats) and
+one new staged run per valid issue outside the slice
+(`data/runs/val-unit-staged-r1.jsonl`), both from the 06a pipeline unchanged,
+at the pin. Patches in `data/runs/val-n40-patch.jsonl`.
+
+Commands: `python -m eval.verify_harness`, then
+`PROVIDER=anthropic python -m eval.ablation --arms staged --issues data/verify_valid_new.txt --repeats 1 --name val-unit-staged-r1 --max-dollars 0.75`,
+then `PROVIDER=anthropic python -m eval.patch_eval --max-dollars 0.55`, then
+`python -m eval.patch_report`. The smoke test's runs went into the same files
+and are counted below.
+
+**Harness: 29 of 43 issues are valid (no model call).** Valid means the gold
+tests fail on the pre-fix tree and pass with the real fix's source applied.
+
+| | in the 40-row slice | outside | all |
+|---|---|---|---|
+| valid | 6 | 23 | 29 |
+| fails_with_fix | 3 | 4 | 7 |
+| install_failed | 0 | 5 | 5 |
+| timeout | 0 | 1 | 1 |
+| passes_without_fix | 0 | 1 | 1 |
+| total | 9 | 34 | 43 |
+
+- `fails_with_fix` (#14170, #14312, #14542, #15485, #16355, #16631, #18222):
+  the real fix's own tests do not pass under the harness. Not diagnosed one by
+  one; they are excluded, not guessed at.
+- `install_failed`: four (#15781, #17467, #17892, #18489) are fixes merged in
+  2025 whose pre-fix tree needs Node ≥ 20 (the rolldown `build-bundle` fails,
+  or the pinned pnpm needs newer Node) under the `node:18` image. #17409 was an
+  I/O error when the host disk filled during the run.
+- `timeout`: #15076, at 300 s. `passes_without_fix`: #18527.
+
+Prepare builds the workspace vite (`build-bundle`) as well as installing,
+because vitest imports vite from its `dist`. Each base is discarded once its
+issue is done. The first full harness run kept every base, filled the host
+disk at about 2–3 GB per base and wedged Docker; after recovery the design
+changed to one base at a time.
+
+**New staged runs (06a pipeline, unchanged, at the pin).** 22 of the 23 new
+valid issues ran. The spend cap stopped the 23rd (#18533), which was left
+unrun on purpose: the account had $0.44 of credit left. Spend $0.276, about
+$0.013 per run against a $0.009 projection. 18 of the 22 produced a hypothesis.
+
+| outcome | runs |
+|---|---|
+| hit | 13 |
+| hypothesize_miss | 3 |
+| understand_miss | 2 |
+| error:understand | 2 |
+| error:locate | 1 |
+| error:hypothesize | 1 |
+
+**Patch outcomes (29 runs: 11 from the slice's stored hypotheses on its 6
+valid issues, 18 new).** Repeat 0 has 23 runs and repeat 1 has 6 (slice only),
+so the min–max is mostly the spread of a 6-run repeat.
+
+| outcome | runs | share | min | max |
+|---|---|---|---|---|
+| test_fail | 15 | 51.7% | 50.0% | 52.2% |
+| pass | 6 | 20.7% | 0.0% | 26.1% |
+| stale_path | 4 | 13.8% | 8.7% | 33.3% |
+| patch_error | 4 | 13.8% | 13.0% | 16.7% |
+
+**Pass rate over patchable runs (excluding `stale_path`): 6 of 25, 24.0%.**
+All 4 `patch_error`s were turn stops (no final answer after 6 turns); no edit
+was rejected by the check. All 15 `test_fail`s were failed tests, none a
+timeout. No api, infra or unexpected errors, so no run was retried or
+re-verified.
+
+**By the source 06a outcome.** The report's n includes `stale_path` rows;
+the patchable column leaves them out.
+
+| source outcome | runs | stale_path | patchable | pass | pass / runs | pass / patchable |
+|---|---|---|---|---|---|---|
+| hit | 20 | 0 | 20 | 3 | 3/20 (15%) | 3/20 (15%) |
+| hypothesize_miss | 5 | 2 | 3 | 2 | 2/5 | 2/3 |
+| understand_miss | 4 | 2 | 2 | 1 | 1/4 | 1/2 |
+
+Misses together: 3 of 9 runs, 3 of 5 patchable.
+
+**Among source hits, by `fault_hit`** (whether 06a's fault lines overlapped a
+gold region).
+
+| fault_hit | runs | patch_error | pass |
+|---|---|---|---|
+| True | 8 | 2 | 1 (1/8) |
+| False | 6 | 0 | 1 (1/6) |
+| None (no region gold) | 6 | 2 | 1 (1/6) |
+
+**Cost.** $0.117 for the patch run: $0.005 per patch (25 patchable runs; a
+`stale_path` makes no call) and $0.020 per pass. A verify took 1–11 s on a
+prepared base.
+
+**Spend.** Harness free; staged runs $0.276; patch run $0.117; ≈ $0.39 in all,
+under the $1.30 plan and within the $0.44 of credit left.
+
+**The passes, read by hand.** 5 of the 6 edit a gold file. #17676 passed by
+editing `ssrTransform.ts` while the real fix edited `utils.ts`: a different
+fix that satisfies the gold tests. #18144 (`hypothesize_miss`) and #17698
+(`understand_miss`) passed by editing a gold file anyway. The source outcome
+is judged on 06a's `suspected_files[0]`; the patch stage starts from the
+fault's file and re-reads the code, so a 06a "miss" can still hand it a gold
+file.
+
+**A near miss.** #15018's patch changed the right line of `importAnalysis.ts`
+in the right direction, but its gold test compares the exact generated code,
+so equivalent but different output fails. Fail-to-pass grades the real fix's
+exact behaviour.
+
+**Stale paths: 4 of 29 runs (13.8%).** All four are on two slice issues
+(#14010, #14433, both repeats), and all four faults name
+`packages/vite/src/module-runner/runner.ts`, which does not exist before these
+2023 fixes. None of the 18 new runs had one. 06a localises against the 2026
+pin; on these two SSR issues it found the bug in code that was written after
+the bug was fixed. That is a direct count of how the pin can warp a
+hypothesis, on 2 of 24 issues here.
+
+**Answer.** *Correct localisation does not visibly turn into working fixes at
+this sample size: hits pass 3 of 20, misses 3 of 9 (3 of 5 patchable), and
+among hits whose fault overlapped the fix's lines 1 of 8 pass; overall a
+quarter of patchable runs pass (6 of 25), and this sample cannot separate
+the rates by outcome.* That much is measured.
+
+**What 25 patchable runs cannot separate.**
+- Hit against miss. 3/20 against 3/5 points the wrong way, but the miss side
+  is 5 runs, where one run moves the share by 20 points. Hits and misses are
+  also different issues, so issue difficulty is not held fixed.
+- `fault_hit`. True, False and None each have exactly one pass; nothing
+  orders them.
+- Run against issue. 19 of the 24 issues have one run, so an issue's result
+  cannot be told apart from run-to-run variation. Of the 5 slice issues with
+  two runs, none passed: #14010 and #14433 were stale both times, #14449
+  failed its tests both times, and #14189 and #14515 had one turn stop and
+  one test failure each.
+
+**Caveats.**
+- A pass is any change that satisfies the gold tests (#17676 edits a
+  different file from the real fix), and a `test_fail` can be an equivalent
+  fix the exact-output test rejects (#15018). The pass rate is neither a
+  floor nor a ceiling on "fixes the bug"; it is agreement with the real fix's
+  tests.
+- 29 of the 206 val issues are covered: those with a unit-tested fix whose
+  pre-fix tree installs, builds and runs under `node:18`. Fixes without unit
+  tests (163 of 206), and fixes needing Node ≥ 20, are not here.
+- The hypotheses were formed at the pin, which already contains every fix
+  (the Phase 05a and 06a caveat). The patch stage reads only the pre-fix tree
+  and has no `git_log`, so the patch itself cannot copy the fix, but its input
+  may have seen it.
+- One attempt per hypothesis, blind. A retry on test output would leak the
+  answer key, so it is out of scope.

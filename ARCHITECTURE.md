@@ -51,8 +51,8 @@ its steps to the browser as they happen (section 8).
 |---|---|---|
 | `mining/` | issue → fix labels, the pinned SHA, the temporal split | git, GitHub REST |
 | `retrieval/` | chunking, embedding, the `chunks` table, search | Ollama (embeddings), Postgres |
-| `eval/` | scoring: `retrieve` (recall@k, MRR), `grounded` (model re-rank vs retrieval), `agent` (retrieval vs grounded vs agent), `ablation` (the arms, including `staged`), `gold_regions` and `attribution` (which stage missed), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `agent/`, `api/` |
-| `agent/` | the four git tools, the tool-use loop and its budgets, the staged pipeline (`pipeline`, `stages`), the SDK-runner comparison, `explain` (prints a run's message array) | `api/` (prompt, cost, schema), `retrieval/`, git |
+| `eval/` | scoring: `retrieve` (recall@k, MRR), `grounded` (model re-rank vs retrieval), `agent` (retrieval vs grounded vs agent), `ablation` (the arms, including `staged`), `gold_regions` and `attribution` (which stage missed), `fixes`, `container`, `verify`, `verify_harness`, `patch_eval` and `patch_report` (patch and verify), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `agent/`, `api/`, Docker |
+| `agent/` | the four git tools, the tool-use loop and its budgets, the staged pipeline (`pipeline`, `stages`), the patch stage (`patch`), the SDK-runner comparison, `explain` (prints a run's message array) | `api/` (prompt, cost, schema), `retrieval/`, git |
 | `api/` | FastAPI routes, prompts, the provider seam, cost, the `calls` table, the in-memory live-run registry (`live.py`) | `retrieval/`, `agent/`, providers, Postgres |
 | `web/` | one React page over the API, including the live trace reducer (`liveRun.ts`) | `api/` over HTTP |
 | `scripts/` | `gen_types.py`: Pydantic → TypeScript | `api/schema.py` |
@@ -562,6 +562,187 @@ other arms, so staged is paired against `agent` on identical issues.
 
 ---
 
+## 10. Patch and verify: fail-to-pass on the real fix's tests
+
+```
+stored HypothesisResult ─► patch (at_rev(prefix)) ─► PatchResult ─► apply_edits ─► verify ─► pass / test_fail
+                           (read_file, grep,          check_patch      + gold tests   (Docker, network none)
+                            list_dir, 6 turns)                         at the fix
+```
+
+Piece A ends at a hypothesis. Piece B asks whether it is good enough to fix
+the bug: a patch stage writes edits against the code as it was before the fix,
+and verify runs the tests the real fix added or changed. Those tests fail
+without the fix, so a pass shows the reported behaviour is fixed, not only that
+nothing broke. One attempt, graded blind: the test output is the answer key and
+never reaches the model.
+
+The pin can't be used for this. Every val fix is already applied there, so any
+patch, including an empty one, would pass.
+
+### The real fix: `eval/fixes.py`
+
+`fix_for(row, commits)` takes the row's fix commits (as `gold_regions.fix_commits`
+finds them) in `commits.jsonl` order and returns the first one whose diff adds
+or changes a `*.spec.ts` / `*.test.ts` under `packages/vite/src/**/__tests__/`,
+as a `Fix`:
+
+- `prefix_sha`: the fix commit's first parent, the tree every patch is written
+  against and every verify runs on.
+- `gold_tests`: every added or changed file under `__tests__/` (specs,
+  snapshots, fixtures), taken whole at the fix commit. `test_paths` are the
+  specs among them, which is what vitest runs.
+- `fix_source` and `fix_deleted`: the fix's other changes under
+  `packages/vite/src`, kept so the harness can check the real fix passes.
+
+Playground `__tests__` are browser e2e tests and don't count. 43 of the 206 val
+rows have a fix that qualifies.
+
+### Tools at a revision
+
+`agent/tools.py` holds the revision every read uses in a context variable.
+`current_rev()` returns the `at_rev(sha)` override if one is set, else the pin.
+`_kind`, `list_dir`, `read_file`, `grep`, `git_log`, `file_length` and the
+tracked-file set all go through it, so every existing caller still reads the
+pin and nothing else changed. Because it is a `ContextVar`, an override set in
+one worker thread does not leak into another.
+
+### The patch stage: `agent/patch.py`, `agent/stages.py`
+
+`run_patch(title, body, hypothesis, prefix, cutoff)` is one `loop.run` call
+inside `with tools.at_rev(prefix)`, the same loop as sections 7 and 9 with the
+three parameters section 9 added:
+
+| | |
+|---|---|
+| First message | the issue, then the stored `HypothesisResult` as JSON, with a note that its line numbers come from newer code and may be off |
+| Tools | `read_file`, `grep`, `list_dir` at the pre-fix commit (no `git_log`) |
+| Turns | 6 (`PATCH_TURNS`) |
+| Output | `PatchResult`: `reasoning` and 1 to 5 `Edit`s (`path`, `old`, `new`) |
+| Check | `check_patch(prefix)`, below |
+
+- **The check rejects; it never prunes.** A dropped edit changes the patch, so
+  unlike locate and understand nothing is cut. Each edit's path (a leading `./`
+  stripped) must pass `is_gold_candidate` (source, not a test) and exist at the
+  pre-fix commit; `old` must be non-empty and occur exactly once in that file;
+  edits to one file must not overlap; at most 5 edits. A failure raises
+  `ValueError` prefixed `patch:`, which the loop turns into a `RunError` that
+  ends the run ("final answer rejected"), as in section 7. There is no second
+  try: the prompt asks for `old` copied without `read_file`'s `N: ` prefixes.
+- **Applying is plain string work.** `apply_edits(edits, rev)` reads each file
+  with `git show rev:path` and applies its edits from the end backwards, so
+  earlier offsets stay valid (the check already guaranteed one match and no
+  overlap). It returns path → full new content, which is what verify writes.
+  `patch_to_diff` gives the same change as a unified diff; it is stored on the
+  record for the diff viewer and is never applied.
+
+### The container: `eval/container.py`
+
+One image, `vite-triage-verify:node18` (`eval/docker/Dockerfile`: `node:18`
+with corepack enabled). Two volumes: `vtr-work` holds one base per issue at
+`/work/<issue>`, and `vtr-store` holds the pnpm store and corepack's cache,
+shared by every base. The Vite clone is mounted read-only at `/repo`.
+
+- **`prepare(fix)`, network on.** `git archive` the pre-fix commit into
+  `/work/<issue>`, commit it to a fresh git repo (so it can be reset), `pnpm
+  install --frozen-lockfile` against the shared store, then `pnpm --filter
+  ./packages/vite run build-bundle`: vitest imports the workspace's vite from
+  its `dist`, as Vite's own CI builds before `test-unit`. Every step ends in
+  `|| fail`, which removes the directory; `.ready` is written only after all
+  succeed, and a base that has it is reused as is.
+- **`run_tests(fix, files, delete)`, network off.** Reset the base (`git reset
+  --hard`, `git clean -fd`; no `-x`, so `node_modules` and `dist` stay), delete
+  `delete`, untar `files` from stdin over it, and run `pnpm exec vitest run` on
+  the fix's specs under `timeout`. The container gets `--network none`, `--cpus
+  4`, `--memory 4g` and 300 s. Resetting at the start, not the end, is what
+  keeps a crashed or killed run from leaking into the next. Runs on one base
+  must not overlap, so callers hold `container.LOCK`.
+- **`discard(fix)`** removes the base. A base is 2–3 GB of `node_modules` and
+  `dist`; the first full harness run kept them all, filled the host disk and
+  wedged Docker. Now each issue's base is discarded once that issue is done,
+  so about one exists at a time, and `prepare` rebuilds it from the shared
+  store if it is needed again. A Docker failure here raises, since a base left
+  behind is the disk problem itself.
+- **Status, exactly one of four.** `classify` returns `timeout` (the
+  in-container `timeout` fired, or Docker's own wait expired), `pass` (exit 0),
+  `test_fail` only when vitest exited 1 and its summary reports failed test
+  files, and `infra` for anything else: OOM, a missing base, Docker, git or tar
+  failing, no test files found. `infra` is never counted as a test failure.
+
+`eval/verify.py::verify(fix, edits)` is the one call the patch run makes:
+`apply_edits` at the pre-fix commit, plus the gold tests at the fix commit,
+into `run_tests`, returning `VerifyResult` (`passed`, exit code, seconds, the
+last 4 KB of output, `timed_out`, `status`).
+
+### The harness: `eval/verify_harness.py`
+
+Before anything is paid for, each of the 43 issues is checked with the real
+fix: prepare; gold tests on the pre-fix tree must come back `test_fail`; gold
+tests plus `fix_source` (and `fix_deleted`) must come back `pass`. Anything
+else is invalid with a reason (`install_failed`, `passes_without_fix`,
+`fails_with_fix`, `timeout`, `infra_error`), and those issues are never patched.
+The pass check also tests verify itself: if the real fix does not pass, the
+harness is wrong, not the model.
+
+`data/verify_harness.jsonl` (gitignored) is both the log and the cache: a
+record is reused while its `prefix_sha` and `fix_sha` match and its reason is
+not `infra_error`; a later line supersedes an earlier one, and a torn last line
+is skipped on read and newline-terminated before the next append. An
+exception on one issue is recorded as `infra_error` rather than stopping the
+rest, and the base is discarded in a `finally`. It writes
+`data/verify_valid.txt` and `data/verify_valid_new.txt` (valid issues outside
+the 40-row slice), which is what `eval.ablation --issues` reads to give those
+issues one new staged run.
+
+### The run: `eval/patch_eval.py`
+
+`eligible` reads arm-`staged` records from `val-n40-r3.jsonl` and
+`val-unit-staged-r1.jsonl`, keeps the latest per `(issue, repeat)` (an
+api-errored staged record has no hypothesis and is skipped; the same key in
+both files raises), and keeps those with a hypothesis on a harness-valid issue.
+`make_patch_record` never raises; whatever happened is the record. Each record
+carries the source record's `outcome` and `fault_hit`, `prefix_sha`, `patch`,
+`diff`, `verify` (with its tail), `outcome`, `cost_usd`, `turns`, `error` and
+`error_kind`.
+
+| Outcome | Condition |
+|---|---|
+| `stale_path` | the hypothesis's `fault.path` does not exist at the pre-fix commit; no model call |
+| `patch_error` | the stage raised a `RunError` of its own: a turn or budget stop, or an answer the check rejected |
+| `test_fail` | verify status `test_fail` or `timeout` |
+| `pass` | verify status `pass` |
+| none, with `error_kind` | `api` (the SDK failed, including a `RunError` caused by an `anthropic.APIError`), `infra` (prepare failed, verify raised, or status `infra`), `unexpected` (any other exception) |
+
+- **Resume.** The output file is the resume state. A rerun skips every key
+  whose record has no `error_kind`, or `unexpected`: that is a bug, and a retry
+  would only pay for it again. `api` and `infra` keys run again. An `infra`
+  record that kept its edits is re-verified from them, with no model call: the
+  new record has `reverified_from_infra` and costs 0.0, since the old one
+  already holds the spend.
+- **Spend.** `--max-dollars` is the file's lifetime cap. The run refuses to
+  start if what the file already spent plus the estimate (the mean of real
+  patches so far, else $0.01; stale and re-verify jobs free) exceeds it, and
+  stops starting jobs once actual spend passes it; jobs in flight finish.
+- **One base at a time.** Jobs run on 4 threads in `(issue, repeat)` order. A
+  per-issue counter discards the base after that issue's last job, verified or
+  not. Prepare and verify run under `container.LOCK`, so the model calls run in
+  parallel and the containers one at a time.
+
+### The report: `eval/patch_report.py`
+
+A pure function of the patch file and the harness cache. The key is `(issue,
+repeat)`; the last record per key gives its outcome, so a retried or
+re-verified key counts once. Total spend sums `cost_usd` over all records, so
+each paid call is counted once. Keys whose final record is an `api`, `infra`
+or `unexpected` error are left out of every share and rate and reported as
+counts. It prints the outcome table (share, min–max across repeats), the pass
+rate over patchable runs (everything but `stale_path`), passes by source
+outcome (whose n includes `stale_path`) and by `fault_hit` among source hits,
+cost per patch (spend over patchable keys) and per pass, and each
+harness-invalid issue with its reason.
+
+---
+
 ## Configuration and corpora
 
 Everything is driven by `.env`. `ENV_FILE=.env.<name>` points mining,
@@ -600,6 +781,6 @@ migration.
 |---|---|
 | 05 Agent loop | done: the A/B (`eval/ablation.py`), budgets and the live run (section 8) |
 | 06 Workflow, Piece A | done: staged analysis and attribution (section 9), eval-only |
-| 06 Workflow, Piece B | patch and verify. Needs a per-issue checkout from before the fix: at the pin every val fix is already applied, so any patch would "pass". |
-| 06 Workflow, Piece C | the stage-segmented trace and a diff viewer in the UI. A stage can emit through the same `on_event` seam and `LiveEvent` union, so the trace panel gains stages without a new transport; this is also where staged runs would reach `/runs` |
+| 06 Workflow, Piece B | done: patch and verify against each fix's pre-fix commit, fail-to-pass in Docker (section 10), eval-only |
+| 06 Workflow, Piece C | next: the stage-segmented trace and a diff viewer in the UI. The viewer can show the `diff` each patch record already stores. A stage can emit through the same `on_event` seam and `LiveEvent` union, so the trace panel gains stages without a new transport; this is also where staged runs would reach `/runs` |
 | 07 Production | cache columns in `calls`, nightly `eval.retrieve`, the test split, the second corpus as a held-out generalization check. Also where the live run's limits get revisited: a shared registry (or an events table) for more than one process, and auth |
