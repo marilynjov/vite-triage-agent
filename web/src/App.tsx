@@ -14,6 +14,9 @@
  * TypeScript can therefore prove they are there.
  */
 import { useEffect, useReducer, useRef, useState } from 'react'
+import { API } from './api'
+import { parseHash, type Route } from './router'
+import { RunsView } from './runs'
 import type { LiveEvent, TriageResult } from './types.generated'
 import {
   initialLiveState,
@@ -25,7 +28,6 @@ import {
 } from './liveRun'
 import './App.css'
 
-const API = 'http://localhost:8000'
 const RUN_KEY = 'live-run-id'
 const EVENT_TYPES: LiveEvent['type'][] = [
   'run_started',
@@ -315,7 +317,7 @@ function LivePanel({ live, limits }: { live: LiveState; limits: Limits | null })
   )
 }
 
-export default function App() {
+function TriageView() {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [naive, setNaive] = useState<NaiveResponse | null>(null)
@@ -503,5 +505,32 @@ export default function App() {
         </section>
       )}
     </main>
+  )
+}
+
+/**
+ * Two views from the hash. Triage stays mounted while hidden, so a live run's
+ * stream and the typed issue survive a trip to the run browser and back.
+ */
+export default function App() {
+  const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash))
+
+  useEffect(() => {
+    const onHash = () => setRoute(parseHash(window.location.hash))
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  return (
+    <>
+      <header className="views">
+        <a href="#/" aria-current={route.view === 'triage' ? 'page' : undefined}>Triage</a>
+        <a href="#/runs" aria-current={route.view === 'runs' ? 'page' : undefined}>Runs</a>
+      </header>
+      <div hidden={route.view !== 'triage'}>
+        <TriageView />
+      </div>
+      {route.view === 'runs' && <RunsView issue={route.issue} repeat={route.repeat} />}
+    </>
   )
 }
