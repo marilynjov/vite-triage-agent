@@ -200,8 +200,10 @@ route ─► triage.py (owns the prompt) ─► providers.complete[_structured] 
   separable in the table.
 - **Routes.** `POST /triage/{naive,structured,grounded,agent}` and `POST /runs`
   make model calls. `GET /runs/limits`, `GET /runs/{id}` and
-  `GET /runs/{id}/events` read a live run (section 8). `GET /calls`,
-  `POST /retrieve`, `GET /corpora` and `GET /health` make none.
+  `GET /runs/{id}/events` read a live run (section 8). `GET /staged-runs` and
+  `GET /staged-runs/{issue}/{repeat}` read the stored staged runs (06a) with their
+  patch and verify (06b) and the real fix's diff, for the run browser. `GET /calls`,
+  `POST /retrieve`, `GET /corpora` and `GET /health` make none, and neither do these two.
 - **Cost is computed, not estimated.** `cost.py` prices the token counts the
   provider reports, at four rates (input, output, cache write, cache read).
   Local models cost $0.

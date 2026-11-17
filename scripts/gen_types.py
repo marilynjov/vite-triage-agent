@@ -18,22 +18,24 @@ OUT = ROOT / "web" / "src" / "types.generated.ts"
 
 sys.path.insert(0, str(ROOT))
 from api.schema import (  # noqa: E402
-    Done, Failed, GroundedTriageResult, LiveCandidate, RunStarted, StepStarted,
-    ToolCall, ToolCalled, ToolReturned, Totals, TriageResult, Usage,
+    Done, Edit, Failed, Fault, GroundedTriageResult, HypothesisResult, LiveCandidate,
+    LocatedFile, LocateResult, PatchView, RealFix, Region, RunStarted, StagedRunDetail,
+    StagedRunSummary, StagedStages, StepStarted, StoredToolCall, ToolCall, ToolCalled,
+    ToolReturned, Totals, TriageResult, UnderstandResult, Usage, VerifyView,
 )
 
 LIVE_MEMBERS = [RunStarted, StepStarted, Usage, ToolCalled, ToolReturned, Done, Failed]
 LIVE_PARTS = [Totals, LiveCandidate]
+# Phase 06c's run browser, with every model its fields reference.
+STAGED_MODELS = [LocatedFile, LocateResult, Region, UnderstandResult, Fault, HypothesisResult,
+                 Edit, StagedStages, StoredToolCall, VerifyView, PatchView, RealFix,
+                 StagedRunSummary, StagedRunDetail]
 
 
-def live_defs() -> dict:
-    """The live-run events as $defs, each titled by its class name, plus the LiveEvent union.
-
-    Every model is rendered with refs pointing at the shared $defs, and Done.result
-    points at the GroundedTriageResult already emitted above rather than a copy.
-    """
+def named_defs(models: list) -> dict:
+    """Each model as a $def titled by its class name, its refs pointing at the shared $defs."""
     defs: dict = {}
-    for model in LIVE_PARTS + LIVE_MEMBERS:
+    for model in models:
         schema = model.model_json_schema(ref_template="#/$defs/{model}")
         schema.pop("$defs", None)
         schema["title"] = model.__name__
@@ -42,6 +44,15 @@ def live_defs() -> dict:
         for prop in schema["properties"].values():
             prop.pop("title", None)
         defs[model.__name__] = schema
+    return defs
+
+
+def live_defs() -> dict:
+    """The live-run events as $defs plus the LiveEvent union.
+
+    Done.result points at the GroundedTriageResult already emitted above rather than a copy.
+    """
+    defs = named_defs(LIVE_PARTS + LIVE_MEMBERS)
     defs["Done"]["properties"]["result"] = {"$ref": "#/$defs/GroundedTriageResult"}
     defs["LiveEvent"] = {
         "title": "LiveEvent",
@@ -73,6 +84,7 @@ def main() -> None:
         # Not reachable from TriageResult; emitted the same way so the UI can import it.
         "ToolCall": ToolCall.model_json_schema(),
         **live_defs(),
+        **named_defs(STAGED_MODELS),
     }
 
     try:

@@ -193,3 +193,219 @@ export interface Failed {
   limit: ("turns" | "tokens" | "seconds" | "dollars") | null;
   value: number | null;
 }
+/**
+ * A file the locate stage names, with why and what it saw there.
+ *
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "LocatedFile".
+ */
+export interface LocatedFile {
+  path: string;
+  why: string;
+  evidence: string;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "LocateResult".
+ */
+export interface LocateResult {
+  reasoning: string;
+  /**
+   * @minItems 1
+   * @maxItems 5
+   */
+  files:
+    | [LocatedFile]
+    | [LocatedFile, LocatedFile]
+    | [LocatedFile, LocatedFile, LocatedFile]
+    | [LocatedFile, LocatedFile, LocatedFile, LocatedFile]
+    | [LocatedFile, LocatedFile, LocatedFile, LocatedFile, LocatedFile];
+}
+/**
+ * A span of a located file that implements the reported behaviour.
+ *
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "Region".
+ */
+export interface Region {
+  path: string;
+  symbol: string | null;
+  start_line: number;
+  end_line: number;
+  what_it_does: string;
+  relevance: string;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "UnderstandResult".
+ */
+export interface UnderstandResult {
+  reasoning: string;
+  /**
+   * @minItems 1
+   * @maxItems 6
+   */
+  regions:
+    | [Region]
+    | [Region, Region]
+    | [Region, Region, Region]
+    | [Region, Region, Region, Region]
+    | [Region, Region, Region, Region, Region]
+    | [Region, Region, Region, Region, Region, Region];
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "Fault".
+ */
+export interface Fault {
+  path: string;
+  start_line: number;
+  end_line: number;
+  mechanism: string;
+}
+/**
+ * The hypothesize stage's result: the triage fields plus where the fault is.
+ *
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "HypothesisResult".
+ */
+export interface HypothesisResult {
+  reasoning: string;
+  issue_type: "bug" | "regression" | "enhancement" | "documentation" | "question" | "upstream";
+  severity: "low" | "medium" | "high";
+  /**
+   * @maxItems 3
+   */
+  suspected_components: [] | [string] | [string, string] | [string, string, string];
+  /**
+   * @maxItems 10
+   */
+  reproduction_steps:
+    | []
+    | [string]
+    | [string, string]
+    | [string, string, string]
+    | [string, string, string, string]
+    | [string, string, string, string, string]
+    | [string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string, string, string, string];
+  confidence: number;
+  /**
+   * @maxItems 5
+   */
+  suspected_files:
+    | []
+    | [string]
+    | [string, string]
+    | [string, string, string]
+    | [string, string, string, string]
+    | [string, string, string, string, string];
+  fault: Fault;
+}
+/**
+ * One search/replace: `old` must occur exactly once in `path` at the pre-fix tree.
+ *
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "Edit".
+ */
+export interface Edit {
+  path: string;
+  old: string;
+  new: string;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "StagedStages".
+ */
+export interface StagedStages {
+  locate: LocateResult | null;
+  understand: UnderstandResult | null;
+  hypothesis: HypothesisResult | null;
+}
+/**
+ * A tool call as the eval stored it: no turn, so not a live ToolCall.
+ *
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "StoredToolCall".
+ */
+export interface StoredToolCall {
+  name: string;
+  input: {
+    [k: string]: unknown;
+  };
+  is_error: boolean;
+  output_preview: string;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "VerifyView".
+ */
+export interface VerifyView {
+  passed: boolean;
+  status: string;
+  seconds: number;
+  tail: string;
+  timed_out: boolean;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "PatchView".
+ */
+export interface PatchView {
+  reasoning: string | null;
+  edits: Edit[];
+  diff: string | null;
+  outcome: string | null;
+  cost_usd: number;
+  error: string | null;
+  verify: VerifyView | null;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "RealFix".
+ */
+export interface RealFix {
+  sha: string;
+  prefix_sha: string;
+  diff: string;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "StagedRunSummary".
+ */
+export interface StagedRunSummary {
+  issue: number;
+  repeat: number;
+  title: string;
+  outcome: string;
+  failed_stage: string | null;
+  cost_usd: number;
+  patch_outcome: string | null;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "StagedRunDetail".
+ */
+export interface StagedRunDetail {
+  issue: number;
+  repeat: number;
+  title: string;
+  outcome: string;
+  failed_stage: string | null;
+  cost_usd: number;
+  patch_outcome: string | null;
+  body: string;
+  gold: string[];
+  stages: StagedStages;
+  stage_costs: {
+    [k: string]: number;
+  };
+  error: string | null;
+  fault_hit: boolean | null;
+  tool_calls: StoredToolCall[];
+  patch: PatchView | null;
+  real_fix: RealFix | null;
+}

@@ -21,7 +21,8 @@ from retrieval import config as R, search
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from . import config as C, cost, db, live, triage
+from . import config as C, cost, db, live, staged_runs, triage
+from .schema import StagedRunDetail, StagedRunSummary
 from .models import (
     AgentTriageRequest,
     AgentTriageResponse,
@@ -379,6 +380,21 @@ def retrieve(request: RetrieveRequest) -> RetrieveResponse:
 def corpora() -> list[dict]:
     """What /retrieve can search."""
     return [{"corpus": c, "strategy": s, "chunks": n} for c, s, n in search.indexed()]
+
+
+@app.get("/staged-runs", response_model=list[StagedRunSummary])
+def list_staged_runs() -> list[StagedRunSummary]:
+    """Every stored staged val run (06a), with its patch outcome (06b) if it has one. No model call."""
+    return staged_runs.list_runs()
+
+
+@app.get("/staged-runs/{issue}/{repeat}", response_model=StagedRunDetail)
+def staged_run(issue: int, repeat: int) -> StagedRunDetail:
+    """One stored staged run stage by stage, its patch and verify, and the real fix's diff."""
+    run = staged_runs.get_run(issue, repeat)
+    if run is None:
+        raise HTTPException(404, f"no staged run for issue {issue} repeat {repeat}")
+    return run
 
 
 @app.get("/calls")

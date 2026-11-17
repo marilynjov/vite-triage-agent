@@ -1,10 +1,13 @@
 """The run browser's loader, real-fix diff and routes: hand-made records, no model."""
 from __future__ import annotations
 
+import builtins
 import json
+import pathlib
 import subprocess
 
 import pytest
+from fastapi.testclient import TestClient
 
 import mining.config as M
 
@@ -242,3 +245,55 @@ def test_prefers_the_commit_the_verifier_graded(repo, monkeypatch):
     commits = [{"sha": later, "closes_refs": [5]}, {"sha": repo.fix_sha, "closes_refs": [5]}]
     monkeypatch.setattr(staged_runs, "_commits", lambda: commits)
     assert staged_runs.real_fix_diff({"issue": 5, "linked_prs": []}).sha == repo.fix_sha
+
+
+# --- routes -----------------------------------------------------------------
+
+@pytest.fixture
+def client(monkeypatch):
+    async def noop():
+        pass
+
+    monkeypatch.setattr("api.main.db.connect", noop)
+    monkeypatch.setattr("api.main.db.disconnect", noop)
+    from api.main import app
+    with TestClient(app) as c:
+        yield c
+
+
+def test_list_endpoint(client, files):
+    files.staged([staged(8), staged(7, repeat=1)])
+    body = client.get("/staged-runs").json()
+    assert [(r["issue"], r["repeat"]) for r in body] == [(7, 1), (8, 0)]
+
+
+def test_detail_endpoint_and_404(client, files):
+    files.staged([staged(7)])
+    assert client.get("/staged-runs/7/0").json()["stages"]["locate"]["files"]
+    r = client.get("/staged-runs/7/3")
+    assert r.status_code == 404 and "issue 7 repeat 3" in r.json()["detail"]
+
+
+def test_loader_never_opens_a_test_split_path(client, tmp_path, monkeypatch):
+    # set up by hand, not via `files`: the guard needs the real val_rows and real_fix_diff
+    sf = tmp_path / "s.jsonl"
+    sf.write_text(json.dumps(staged(17676)) + "\n")
+    monkeypatch.setattr(staged_runs, "STAGED_FILES", (sf,))
+    monkeypatch.setattr(staged_runs, "PATCH_FILE", tmp_path / "none.jsonl")
+    opened = []
+    real_open, real_read = builtins.open, pathlib.Path.read_text
+
+    def spy_open(p, *a, **k):
+        opened.append(str(p))
+        return real_open(p, *a, **k)
+
+    def spy_read(self, *a, **k):
+        opened.append(str(self))
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", spy_open)
+    monkeypatch.setattr(pathlib.Path, "read_text", spy_read)
+    assert client.get("/staged-runs").status_code == 200
+    assert client.get("/staged-runs/17676/0").status_code == 200
+    assert any("splits/val" in p for p in opened)
+    assert not [p for p in opened if "splits/test" in p]
