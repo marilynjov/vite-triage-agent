@@ -54,9 +54,8 @@ def path_exists(sha: str, path: str) -> bool:
     return _git("cat-file", "-e", f"{sha}:{path}").returncode == 0
 
 
-def eligible(staged: list[dict], harness: dict[int, dict], rows: dict[int, dict],
-             fixes: dict[int, Fix]) -> list[PatchJob]:
-    """Staged records with a hypothesis on a harness-valid issue, one job each."""
+def latest_staged(staged: list[dict]) -> dict[tuple[int, int], dict]:
+    """The newest staged record per (issue, repeat); a key in two files raises."""
     latest: dict[tuple[int, int], dict] = {}
     for r in staged:
         # ablation appends a retry after an api-errored record: that one has no hypothesis
@@ -68,6 +67,13 @@ def eligible(staged: list[dict], harness: dict[int, dict], rows: dict[int, dict]
             raise ValueError(f"duplicate staged record for (issue, repeat) = {key} "
                              f"in {old.get('_src')} and {r.get('_src')}")
         latest[key] = r  # within one file, append order is age: the last wins
+    return latest
+
+
+def eligible(staged: list[dict], harness: dict[int, dict], rows: dict[int, dict],
+             fixes: dict[int, Fix]) -> list[PatchJob]:
+    """Staged records with a hypothesis on a harness-valid issue, one job each."""
+    latest = latest_staged(staged)
     jobs = []
     for r in latest.values():
         if not (r.get("stages") or {}).get("hypothesis"):

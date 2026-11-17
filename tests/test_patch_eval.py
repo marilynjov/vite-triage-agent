@@ -249,6 +249,19 @@ def test_eligible_keeps_the_last_of_a_repeated_key_in_one_file():
     assert len(jobs) == 1 and jobs[0].source["cost_usd"] == 0.2
 
 
+def test_latest_staged_last_wins_and_skips_api_and_other_arms():
+    recs = [src(7, outcome="error:understand"), src(7, outcome="hit"),
+            src(8, error_kind="api"), src(9, arm="agent")]
+    got = patch_eval.latest_staged(recs)
+    assert list(got) == [(7, 0)]
+    assert got[(7, 0)]["outcome"] == "hit"
+
+
+def test_latest_staged_raises_on_a_key_in_two_files():
+    with pytest.raises(ValueError, match="duplicate staged record"):
+        patch_eval.latest_staged([src(7, _src="a"), src(7, _src="b")])
+
+
 # --- the run --------------------------------------------------------------
 
 def test_done_keys_skip_everything_but_api_and_infra():
