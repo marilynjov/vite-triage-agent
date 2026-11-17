@@ -292,3 +292,80 @@ LiveEvent = Annotated[
     Field(discriminator="type"),
 ]
 LIVE_EVENT = TypeAdapter(LiveEvent)
+
+
+# --- Phase 06c: the run browser ---------------------------------------------
+# Stored staged runs as the UI reads them. Nothing here constrains a model; these
+# shape what GET /staged-runs returns, and gen_types.py emits them by class name.
+
+class StoredToolCall(BaseModel):
+    """A tool call as the eval stored it: no turn, so not a live ToolCall."""
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    input: dict[str, Any]
+    is_error: bool
+    output_preview: str
+
+
+class VerifyView(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    passed: bool
+    status: str
+    seconds: float
+    tail: str
+    timed_out: bool
+
+
+class PatchView(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    reasoning: str | None
+    edits: list[Edit]
+    diff: str | None
+    outcome: str | None
+    cost_usd: float
+    error: str | None
+    verify: VerifyView | None
+
+
+class RealFix(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    sha: str
+    prefix_sha: str
+    diff: str
+
+
+class StagedStages(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    locate: LocateResult | None
+    understand: UnderstandResult | None
+    hypothesis: HypothesisResult | None
+
+
+class StagedRunSummary(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    issue: int
+    repeat: int
+    title: str
+    outcome: str
+    failed_stage: str | None
+    cost_usd: float
+    patch_outcome: str | None
+
+
+class StagedRunDetail(StagedRunSummary):
+    body: str
+    gold: list[str]
+    stages: StagedStages
+    stage_costs: dict[str, float]
+    error: str | None
+    fault_hit: bool | None
+    tool_calls: list[StoredToolCall]
+    patch: PatchView | None
+    real_fix: RealFix | None

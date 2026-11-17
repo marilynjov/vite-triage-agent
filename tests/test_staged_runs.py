@@ -1,0 +1,169 @@
+"""The run browser's loader, real-fix diff and routes: hand-made records, no model."""
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from api import staged_runs
+from api.schema import HypothesisResult, LocateResult, UnderstandResult
+
+A = "packages/vite/src/node/a.ts"
+STAGES = {
+    "locate": {"reasoning": "r", "files": [{"path": A, "why": "w", "evidence": "e"}]},
+    "understand": {"reasoning": "r", "regions": [
+        {"path": A, "symbol": "f", "start_line": 1, "end_line": 3,
+         "what_it_does": "d", "relevance": "rel"}]},
+    "hypothesis": {"reasoning": "r", "issue_type": "bug", "severity": "low",
+                   "suspected_components": [], "reproduction_steps": [], "confidence": 0.5,
+                   "suspected_files": [A],
+                   "fault": {"path": A, "start_line": 1, "end_line": 2, "mechanism": "m"}},
+}
+ROWS = [{"issue": 7, "title": "seven", "body": "b7"},
+        {"issue": 8, "title": "eight", "body": "b8"}]
+
+
+def staged(issue, repeat=0, **kw):
+    rec = {"arm": "staged", "issue": issue, "repeat": repeat, "outcome": "hit",
+           "failed_stage": None, "fault_hit": True, "cost_usd": 0.01, "gold": [A],
+           "stages": STAGES, "stage_costs": {"locate": 0.004, "understand": 0.004,
+                                             "hypothesize": 0.002},
+           "error": None, "error_kind": None,
+           "tool_calls": [{"name": "read_file", "input": {"path": A}, "is_error": False,
+                           "output_preview": "x"}]}
+    return {**rec, **kw}
+
+
+def patch(issue, repeat=0, outcome="pass", cost_usd=0.004):
+    return {"issue": issue, "repeat": repeat, "outcome": outcome, "cost_usd": cost_usd,
+            "patch": {"reasoning": "pr", "edits": [{"path": A, "old": "a", "new": "b"}]},
+            "diff": "diff --git a/x b/x\n", "error": None, "error_kind": None,
+            "verify": {"passed": outcome == "pass", "exit_code": 0, "seconds": 3.5,
+                       "tail": "ok", "timed_out": False, "status": outcome}}
+
+
+class Files:
+    def __init__(self, tmp_path):
+        self.dir = tmp_path
+        self.s1, self.s2 = tmp_path / "s1.jsonl", tmp_path / "s2.jsonl"
+        self.p = tmp_path / "p.jsonl"
+
+    @staticmethod
+    def _write(path, recs):
+        path.write_text("".join(json.dumps(r) + "\n" for r in recs))
+
+    def staged(self, first, second=()):
+        self._write(self.s1, first)
+        if second:
+            self._write(self.s2, second)
+
+    def raw_staged(self, text):
+        self.s1.write_text(text)
+
+    def patches(self, recs):
+        self._write(self.p, recs)
+
+
+@pytest.fixture
+def files(tmp_path, monkeypatch):
+    f = Files(tmp_path)
+    monkeypatch.setattr(staged_runs, "STAGED_FILES", (f.s1, f.s2))
+    monkeypatch.setattr(staged_runs, "PATCH_FILE", f.p)
+    monkeypatch.setattr(staged_runs, "val_rows", lambda split, n: ROWS)
+    monkeypatch.setattr(staged_runs, "real_fix_diff", lambda row: None)
+    return f
+
+
+# --- loading ----------------------------------------------------------------
+
+def test_last_record_wins_and_api_retry_is_used(files):
+    files.staged([staged(7, outcome="error:understand"), staged(7, outcome="hit"),
+                  staged(8, error_kind="api", outcome=None), staged(8, outcome="locate_miss")])
+    runs = {(r.issue, r.repeat): r for r in staged_runs.list_runs()}
+    assert runs[(7, 0)].outcome == "hit"
+    assert runs[(8, 0)].outcome == "locate_miss"
+
+
+def test_duplicate_key_across_files_raises(files):
+    files.staged([staged(7)], [staged(7)])
+    with pytest.raises(ValueError):
+        staged_runs.list_runs()
+
+
+def test_missing_files_give_empty_list(files):
+    assert staged_runs.list_runs() == []
+
+
+def test_malformed_lines_are_skipped(files):
+    files.raw_staged(json.dumps(staged(7)) + "\n{not json\n\n")
+    assert [r.issue for r in staged_runs.list_runs()] == [7]
+
+
+def test_list_is_sorted_and_titled(files):
+    files.staged([staged(8), staged(7, 1), staged(7, 0)])
+    runs = staged_runs.list_runs()
+    assert [(r.issue, r.repeat) for r in runs] == [(7, 0), (7, 1), (8, 0)]
+    assert runs[0].title == "seven"
+
+
+def test_summary_without_patch(files):
+    files.staged([staged(7, cost_usd=0.01)])
+    (r,) = staged_runs.list_runs()
+    assert (r.patch_outcome, r.cost_usd) == (None, 0.01)
+
+
+def test_summary_cost_includes_the_patch(files):
+    files.staged([staged(7, cost_usd=0.01)])
+    files.patches([patch(7, outcome="pass", cost_usd=0.004)])
+    (r,) = staged_runs.list_runs()
+    assert r.patch_outcome == "pass" and r.cost_usd == pytest.approx(0.014)
+
+
+def test_last_patch_record_wins(files):
+    files.staged([staged(7)])
+    files.patches([{**patch(7), "outcome": None, "error_kind": "infra"}, patch(7, outcome="test_fail")])
+    assert staged_runs.list_runs()[0].patch_outcome == "test_fail"
+
+
+def test_detail_joins_patch_and_validates_stages(files):
+    files.staged([staged(7)])
+    files.patches([patch(7, outcome="test_fail")])
+    d = staged_runs.get_run(7, 0)
+    assert d.body == "b7" and d.gold == [A]
+    assert d.stages.hypothesis.fault.path == A
+    assert d.patch.verify.status == "test_fail" and d.patch.edits[0].path == A
+    assert d.tool_calls[0].name == "read_file"
+
+
+def test_detail_without_patch_record(files):
+    files.staged([staged(7)])
+    assert staged_runs.get_run(7, 0).patch is None
+
+
+def test_invalid_stage_becomes_none(files):
+    files.staged([staged(7, stages={"locate": {"bogus": 1}, "understand": None,
+                                    "hypothesis": None})])
+    assert staged_runs.get_run(7, 0).stages.locate is None
+
+
+def test_unknown_key_is_none(files):
+    assert staged_runs.get_run(999, 0) is None
+
+
+def test_issue_missing_from_val_has_empty_title_and_no_fix(files, monkeypatch):
+    calls = []
+    monkeypatch.setattr(staged_runs, "real_fix_diff", lambda row: calls.append(row))
+    files.staged([staged(42)])
+    d = staged_runs.get_run(42, 0)
+    assert (d.title, d.body, d.real_fix, calls) == ("", "", None, [])
+
+
+def test_every_stage_in_the_real_files_validates():
+    runs = staged_runs.load_runs()
+    if not runs:
+        pytest.skip("data/runs/ not populated")
+    for rec in runs.values():
+        for name, model in (("locate", LocateResult), ("understand", UnderstandResult),
+                            ("hypothesis", HypothesisResult)):
+            if rec["stages"][name] is not None:
+                model.model_validate(rec["stages"][name])
