@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
+
+import mining.config as M
 
 from api import staged_runs
 from api.schema import HypothesisResult, LocateResult, UnderstandResult
@@ -167,3 +170,75 @@ def test_every_stage_in_the_real_files_validates():
                             ("hypothesis", HypothesisResult)):
             if rec["stages"][name] is not None:
                 model.model_validate(rec["stages"][name])
+
+
+# --- the real fix's diff -----------------------------------------------------
+
+SPEC = "packages/vite/src/node/__tests__/a.spec.ts"
+
+
+class Repo:
+    def __init__(self, path):
+        self.path = path
+        self._git("init", "-q")
+        self._git("config", "user.email", "t@t")
+        self._git("config", "user.name", "t")
+        self.base_sha = self.commit({A: "one\n", SPEC: "t1\n"})
+        self.fix_sha = self.commit({A: "two\n", SPEC: "t2\n"})
+
+    def _git(self, *args):
+        return subprocess.run(["git", "-C", str(self.path), *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def commit(self, files):
+        for rel, text in files.items():
+            p = self.path / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text)
+        self._git("add", "-A")
+        self._git("commit", "-qm", "c")
+        return self._git("rev-parse", "HEAD")
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    r = Repo(tmp_path)
+    monkeypatch.setattr(M, "REPO_PATH", tmp_path)
+    staged_runs._diff_at.cache_clear()
+    yield r
+    staged_runs._diff_at.cache_clear()
+
+
+def test_real_fix_diff_excludes_test_files(repo):
+    fix = staged_runs._diff_at(repo.fix_sha)
+    assert (fix.sha, fix.prefix_sha) == (repo.fix_sha, repo.base_sha)
+    assert "node/a.ts" in fix.diff and "+two" in fix.diff
+    assert "__tests__" not in fix.diff
+
+
+def test_fix_touching_only_tests_gives_empty_diff(repo):
+    sha = repo.commit({SPEC: "t3\n"})
+    assert staged_runs._diff_at(sha).diff == ""
+
+
+def test_git_failure_gives_none(repo):
+    assert staged_runs._diff_at("0" * 40) is None
+
+
+def test_row_with_no_fix_commit_gives_none(monkeypatch):
+    monkeypatch.setattr(staged_runs, "_commits", lambda: [])
+    assert staged_runs.real_fix_diff({"issue": 1, "linked_prs": []}) is None
+
+
+def test_falls_back_to_first_fix_commit(repo, monkeypatch):
+    sha = repo.commit({A: "three\n"})  # no unit test, so fix_for finds nothing
+    monkeypatch.setattr(staged_runs, "_commits", lambda: [{"sha": sha, "closes_refs": [5]}])
+    fix = staged_runs.real_fix_diff({"issue": 5, "linked_prs": []})
+    assert fix.sha == sha and "+three" in fix.diff
+
+
+def test_prefers_the_commit_the_verifier_graded(repo, monkeypatch):
+    later = repo.commit({A: "four\n"})
+    commits = [{"sha": later, "closes_refs": [5]}, {"sha": repo.fix_sha, "closes_refs": [5]}]
+    monkeypatch.setattr(staged_runs, "_commits", lambda: commits)
+    assert staged_runs.real_fix_diff({"issue": 5, "linked_prs": []}).sha == repo.fix_sha

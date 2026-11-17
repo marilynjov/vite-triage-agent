@@ -7,6 +7,7 @@ is read.
 """
 from __future__ import annotations
 
+import functools
 import logging
 
 from pydantic import BaseModel, ValidationError
@@ -17,6 +18,9 @@ from api.schema import (
 )
 from eval import patch_eval
 from eval.ablation import val_rows
+from eval.fixes import SRC, _git, _is_test, fix_for
+from eval.gold_regions import fix_commits
+from eval.verify_harness import load_commits
 
 log = logging.getLogger(__name__)
 
@@ -42,8 +46,46 @@ def _rows() -> dict[int, dict]:
     return {r["issue"]: r for r in val_rows("val", patch_eval.ALL)}
 
 
+@functools.lru_cache(maxsize=1)
+def _commits() -> list[dict]:
+    return load_commits()  # 3 MB: read once per process
+
+
+@functools.lru_cache(maxsize=None)
+def _diff_at(sha: str) -> RealFix | None:
+    """The fix's source diff against its first parent, unit tests left out.
+
+    Tests are filtered from --name-only rather than with an exclude pathspec:
+    fixes._git passes --literal-pathspecs, which turns `:!` magic off."""
+    try:
+        prefix = _git("rev-parse", f"{sha}^1")
+        if prefix.returncode != 0:
+            raise RuntimeError(prefix.stderr.strip())
+        names = _git("diff", "--name-only", "--no-renames", prefix.stdout.strip(), sha, "--", SRC)
+        if names.returncode != 0:
+            raise RuntimeError(names.stderr.strip())
+        paths = [p for p in names.stdout.splitlines() if p and not _is_test(p)]
+        diff = ""
+        if paths:
+            r = _git("diff", "--no-renames", prefix.stdout.strip(), sha, "--", *paths)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.strip())
+            diff = r.stdout
+    except Exception as exc:
+        log.warning("real fix diff for %s failed: %s", sha, exc)
+        return None
+    return RealFix(sha=sha, prefix_sha=prefix.stdout.strip(), diff=diff)
+
+
 def real_fix_diff(row: dict) -> RealFix | None:
-    return None
+    """The diff of the commit the verifier graded against, else of the first fix commit."""
+    try:
+        fix = fix_for(row, _commits())
+        shas = [fix.fix_sha] if fix else fix_commits(row, _commits())
+    except Exception as exc:
+        log.warning("fix lookup for issue %s failed: %s", row.get("issue"), exc)
+        return None
+    return _diff_at(shas[0]) if shas else None
 
 
 def _summary(rec: dict, patch: dict | None, row: dict | None) -> dict:
