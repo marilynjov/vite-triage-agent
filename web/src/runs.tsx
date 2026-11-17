@@ -375,7 +375,7 @@ export function RunsView({ issue, repeat }: { issue?: number; repeat?: number })
   const detail = selected === null ? null : fetched !== null && fetched.key === selected ? fetched : undefined
 
   return (
-    <main>
+    <main className="runs-page">
       <h1>Runs</h1>
       <p className="lede">
         Every stored staged val run, stage by stage, ending with the agent's patch
