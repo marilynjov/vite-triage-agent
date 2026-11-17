@@ -43,7 +43,8 @@ def staged(issue, repeat=0, **kw):
 def patch(issue, repeat=0, outcome="pass", cost_usd=0.004):
     return {"issue": issue, "repeat": repeat, "outcome": outcome, "cost_usd": cost_usd,
             "patch": {"reasoning": "pr", "edits": [{"path": A, "old": "a", "new": "b"}]},
-            "diff": "diff --git a/x b/x\n", "error": None, "error_kind": None,
+            "diff": f"--- a/{A}\n+++ b/{A}\n@@ -1 +1 @@\n-a\n+b\n",  # difflib, as stored
+            "error": None, "error_kind": None,
             "verify": {"passed": outcome == "pass", "exit_code": 0, "seconds": 3.5,
                        "tail": "ok", "timed_out": False, "status": outcome}}
 
@@ -207,9 +208,9 @@ class Repo:
 def repo(tmp_path, monkeypatch):
     r = Repo(tmp_path)
     monkeypatch.setattr(M, "REPO_PATH", tmp_path)
-    staged_runs._diff_at.cache_clear()
+    staged_runs._cached_diff.cache_clear()
     yield r
-    staged_runs._diff_at.cache_clear()
+    staged_runs._cached_diff.cache_clear()
 
 
 def test_real_fix_diff_excludes_test_files(repo):
@@ -297,3 +298,18 @@ def test_loader_never_opens_a_test_split_path(client, tmp_path, monkeypatch):
     assert client.get("/staged-runs/17676/0").status_code == 200
     assert any("splits/val" in p for p in opened)
     assert not [p for p in opened if "splits/test" in p]
+
+
+def test_a_git_failure_is_not_cached(repo, monkeypatch):
+    real = staged_runs._git
+    calls = []
+
+    def flaky(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired("git", 60)
+        return real(*args)
+
+    monkeypatch.setattr(staged_runs, "_git", flaky)
+    assert staged_runs._diff_at(repo.fix_sha) is None
+    assert staged_runs._diff_at(repo.fix_sha).sha == repo.fix_sha

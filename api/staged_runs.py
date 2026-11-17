@@ -52,29 +52,31 @@ def _commits() -> list[dict]:
 
 
 @functools.lru_cache(maxsize=None)
-def _diff_at(sha: str) -> RealFix | None:
-    """The fix's source diff against its first parent, unit tests left out.
+def _cached_diff(sha: str) -> RealFix:
+    """The fix's source diff against its first parent, unit tests left out. Raises on failure,
+    so only a success is cached: a commit never changes, a git timeout might not recur.
 
     Tests are filtered from --name-only rather than with an exclude pathspec:
     fixes._git passes --literal-pathspecs, which turns `:!` magic off."""
+    def ok(*args: str) -> str:
+        r = _git(*args)
+        if r.returncode != 0:
+            raise RuntimeError(f"git {args[0]} failed: {r.stderr.strip()}")
+        return r.stdout
+
+    prefix = ok("rev-parse", f"{sha}^1").strip()
+    names = ok("diff", "--name-only", "--no-renames", prefix, sha, "--", SRC)
+    paths = [p for p in names.splitlines() if p and not _is_test(p)]
+    diff = ok("diff", "--no-renames", prefix, sha, "--", *paths) if paths else ""
+    return RealFix(sha=sha, prefix_sha=prefix, diff=diff)
+
+
+def _diff_at(sha: str) -> RealFix | None:
     try:
-        prefix = _git("rev-parse", f"{sha}^1")
-        if prefix.returncode != 0:
-            raise RuntimeError(prefix.stderr.strip())
-        names = _git("diff", "--name-only", "--no-renames", prefix.stdout.strip(), sha, "--", SRC)
-        if names.returncode != 0:
-            raise RuntimeError(names.stderr.strip())
-        paths = [p for p in names.stdout.splitlines() if p and not _is_test(p)]
-        diff = ""
-        if paths:
-            r = _git("diff", "--no-renames", prefix.stdout.strip(), sha, "--", *paths)
-            if r.returncode != 0:
-                raise RuntimeError(r.stderr.strip())
-            diff = r.stdout
+        return _cached_diff(sha)
     except Exception as exc:
         log.warning("real fix diff for %s failed: %s", sha, exc)
         return None
-    return RealFix(sha=sha, prefix_sha=prefix.stdout.strip(), diff=diff)
 
 
 def real_fix_diff(row: dict) -> RealFix | None:
