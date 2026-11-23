@@ -1,4 +1,5 @@
 """Fail-to-pass verify for #14515 in the real container (RUN_DOCKER=1)."""
+import dataclasses
 import json
 
 import pytest
@@ -45,9 +46,17 @@ def test_fail_then_pass_then_fail_again(fix):
     assert "Test Files" in again.tail, again.tail
 
 
+SLOW = "packages/vite/src/node/__tests__/zz-slow.spec.ts"
+SLOW_SPEC = ("import { test } from 'vitest'\n"
+             "test('sleeps', async () => { await new Promise((r) => setTimeout(r, 4000)) }, 60000)\n")
+
+
 def test_timeout_is_reported_and_does_not_leak(fix):
+    # A spec that sleeps, not the real tests: run without pnpm, they finish inside any
+    # whole-second limit, so only a test that waits makes the timeout deterministic.
+    slow_fix = dataclasses.replace(fix, test_paths=(SLOW,))
     with container.LOCK:
-        slow = container.run_tests(fix, _with_fix(fix), fix.fix_deleted, timeout=1)
+        slow = container.run_tests(slow_fix, {SLOW: SLOW_SPEC}, timeout=2)
     assert slow.timed_out is True and slow.status == "timeout"
     after = verify.verify(fix, [])
     assert after.status == "test_fail" and not after.timed_out, after.tail
@@ -70,3 +79,14 @@ def test_discard_is_idempotent_and_prepare_rebuilds(fix):
     ok, tail = container.prepare(fix)
     assert ok, tail
     assert verify.verify(fix, []).status == "test_fail"
+
+
+def test_the_test_container_sees_only_its_base_as_uid_1000(fix):
+    name = container._name(fix, "probe")
+    r = container._docker(*container._test_args(fix, name), "sh", "-c",
+                          "id -u; ls /work; test ! -e /store && test ! -e /repo && echo isolated; "
+                          f"touch /work/{fix.issue}/.probe && rm /work/{fix.issue}/.probe && echo writable")
+    container._docker("rm", "-f", name, timeout=60)
+    out = container._text(r)
+    assert out.split()[:2] == ["1000", str(fix.issue)], out
+    assert "isolated" in out and "writable" in out, out

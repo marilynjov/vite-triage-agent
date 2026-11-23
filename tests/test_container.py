@@ -1,5 +1,6 @@
 """The container's pure parts: the prepare script's failure path (run on the host with sh,
 no Docker) and the run-status classification."""
+import os
 import subprocess
 
 import pytest
@@ -11,13 +12,16 @@ from eval.fixes import Fix
 PREFIX = "cf80e40e43d6d1c358a59be25daa3bd3a2c7c6c6"  # the commit before #14515's fix
 
 
+ME = f"{os.getuid()}:{os.getgid()}"  # a non-root host can only chown to itself
+
+
 def _fix(prefix=PREFIX):
     return Fix(1, "f" * 40, prefix, (), (), (), ())
 
 
 def _run(tmp_path, fix, install, build):
     script = container._prepare_script(fix, work=str(tmp_path), repo=str(M.REPO_PATH),
-                                       install=install, build=build)
+                                       install=install, build=build, owner=ME)
     return subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=300)
 
 
@@ -86,3 +90,40 @@ def test_discard_raises_on_docker_failure(monkeypatch):
                         lambda *a, **k: subprocess.CompletedProcess(a, 125, b"no daemon"))
     with pytest.raises(RuntimeError, match="no daemon"):
         container.discard(_fix())
+
+
+def test_test_args_mount_only_the_issue_base_as_non_root():
+    args = container._test_args(_fix(), "vtr-test-1-x")
+    joined = " ".join(args)
+    assert "type=volume,src=vtr-work,dst=/work/1,volume-subpath=1" in args
+    assert "vtr-store" not in joined and ":/repo" not in joined and "COREPACK" not in joined
+    for flag, value in [("--user", "1000:1000"), ("--pids-limit", "512"), ("--cap-drop", "ALL"),
+                        ("--security-opt", "no-new-privileges"), ("--network", "none"),
+                        ("--cpus", "4"), ("--memory", "4g")]:
+        assert args[args.index(flag) + 1] == value
+    assert args[-1] == container.IMAGE and "--rm" not in args
+
+
+def test_prepare_hands_the_base_to_the_test_user_even_when_already_ready(tmp_path):
+    script = container._prepare_script(_fix(), work=str(tmp_path), repo=str(M.REPO_PATH),
+                                       install="true", build="true", owner=ME)
+    assert script.count(f'chown -R {ME} "$d"') == 2  # ready-exit branch and before .ready
+    first = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=300)
+    assert first.returncode == 0, first.stdout + first.stderr
+    again = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=300)
+    assert again.returncode == 0 and "base ready" in again.stdout
+
+
+def test_the_default_owner_is_the_test_user():
+    assert 'chown -R 1000:1000 "$d"' in container._prepare_script(_fix())
+
+
+def test_run_tests_calls_vitest_directly_not_through_corepack(monkeypatch):
+    calls = []
+    def fake(*args, input=None, timeout=120):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 1, b" Test Files  1 failed (1)\n")
+    monkeypatch.setattr(container, "_docker", fake)
+    container.run_tests(Fix(1, "f" * 40, PREFIX, (), ("a.spec.ts",), (), ()), {})
+    script = next(a[-1] for a in calls if a[0] == "run")
+    assert "./node_modules/.bin/vitest run a.spec.ts" in script and "pnpm exec" not in script

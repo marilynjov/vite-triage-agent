@@ -2,10 +2,13 @@
 
 Volumes: `vtr-work` holds a base per issue at /work/<issue>; `vtr-store` holds the
 pnpm store and corepack's cache, shared by every base. The Vite clone is mounted
-read-only at /repo. `prepare` exports the pre-fix tree, commits it to a fresh git
+read-only at /repo for `prepare` only. `prepare` exports the pre-fix tree, commits it to a fresh git
 repo (so it can be reset), installs once and bundles packages/vite (vitest loads
 the workspace's vite from its dist, as Vite's own CI builds before `test-unit`). `run_tests` resets the base, lays the
-given files over it and runs vitest on the fix's tests. Resetting at the start, not
+given files over it and runs vitest on the fix's tests. A test run sees only its
+own base (a volume-subpath mount at /work/<issue>), no store and no clone, as uid
+1000 with capabilities dropped and a process cap, so model-written code can't
+reach other bases or the shared cache. Resetting at the start, not
 the end, is what keeps a crashed or killed run from leaking into the next one.
 Callers hold LOCK around `run_tests`: runs on one base must not overlap. `discard`
 removes a base once its issue is done, so only a few exist at once (each is 2-3 GB).
@@ -36,6 +39,8 @@ PREPARE_TIMEOUT = 3600
 KILL_GRACE = 10  # seconds `timeout` waits after TERM before KILL
 DOCKER_SLACK = 120  # container start/stop on top of the in-container timeout
 TAIL_CHARS = 4000
+TEST_USER = "1000:1000"  # `node` in node:18; prepare chowns the base to it
+PIDS_LIMIT = 512
 
 
 @dataclass(frozen=True)
@@ -88,12 +93,25 @@ def ensure_image() -> None:
         raise RuntimeError(f"docker build {IMAGE} failed:\n{_tail(_text(r))}")
 
 
-def _run_args(name: str, *extra: str, rm: bool = True) -> list[str]:
-    return ["run", *(["--rm"] if rm else []), "--name", name,
+def _run_args(name: str, *extra: str) -> list[str]:
+    """`prepare`: root, with the shared store and the clone."""
+    return ["run", "--rm", "--name", name,
             "-v", f"{WORK_VOLUME}:/work", "-v", f"{STORE_VOLUME}:/store",
             "-v", f"{M.REPO_PATH}:/repo:ro",
             "-e", "COREPACK_HOME=/store/corepack", "-e", "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
             "-e", "CI=1", "-e", "NO_COLOR=1", *extra, IMAGE]
+
+
+def _test_args(fix: Fix, name: str) -> list[str]:
+    """A test run: only this issue's base, non-root, offline, capped. No /store, so no
+    corepack cache: the script calls vitest's binary directly, not through pnpm."""
+    i = str(fix.issue)
+    return ["run", "--name", name, "-i",
+            "--mount", f"type=volume,src={WORK_VOLUME},dst=/work/{i},volume-subpath={i}",
+            "--user", TEST_USER, "--network", "none", "--cpus", "4", "--memory", "4g",
+            "--pids-limit", str(PIDS_LIMIT), "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "-e", "CI=1", "-e", "NO_COLOR=1", IMAGE]
 
 
 def _name(fix: Fix, what: str) -> str:
@@ -110,13 +128,18 @@ BUILD = "pnpm --filter ./packages/vite run build-bundle"
 
 
 def _prepare_script(fix: Fix, *, work: str = "/work", repo: str = "/repo",
-                    install: str = INSTALL, build: str = BUILD) -> str:
+                    install: str = INSTALL, build: str = BUILD, owner: str = TEST_USER) -> str:
     """Every step ends in `|| fail`: `set -e` is unreliable inside conditions and
-    dash has no pipefail, so the archive is written to a file and checked, not piped."""
+    dash has no pipefail, so the archive is written to a file and checked, not piped.
+    The base is handed to `owner` (the test user) even when already ready, so a base
+    prepared by an older, root-only version still resets under a non-root test run."""
     d = shlex.quote(f"{work}/{fix.issue}")
     return f"""
 d={d}
-if [ -f "$d/.ready" ]; then echo "base ready: $d"; exit 0; fi
+if [ -f "$d/.ready" ]; then
+  chown -R {owner} "$d" || {{ echo "prepare failed at chown: base kept"; exit 1; }}
+  echo "base ready: $d"; exit 0
+fi
 fail() {{ echo "prepare failed at $1: removed $d"; cd /; rm -rf "$d" "$d.tar"; exit 1; }}
 rm -rf "$d" "$d.tar"
 mkdir -p "$d" || fail mkdir
@@ -132,6 +155,7 @@ git -c user.name=verify -c user.email=verify@localhost -c commit.gpgsign=false \
 pnpm --version || fail pnpm-version
 {install} || fail install
 {build} || fail build
+chown -R {owner} "$d" || fail chown
 touch .ready || fail ready
 echo "base ready: $d"
 """
@@ -189,10 +213,10 @@ git clean -fdq
 {f"rm -rf -- {rm}" if rm else ":"}
 tar -x
 set +e
-timeout -k {KILL_GRACE} {int(timeout)} pnpm exec vitest run {tests}
+timeout -k {KILL_GRACE} {int(timeout)} ./node_modules/.bin/vitest run {tests}
 """
     name = _name(fix, "test")
-    args = _run_args(name, "-i", "--network", "none", "--cpus", "4", "--memory", "4g", rm=False)
+    args = _test_args(fix, name)
     start = time.monotonic()
     try:
         try:
