@@ -69,6 +69,31 @@ def score_one(row: dict, k_values: list[int], strategy: str) -> dict:
     return score_ranking(ranked, set(row["gold_files"]), k_values)
 
 
+def evaluate(rows: list[dict], k_values: list[int], strategy: str,
+             progress: bool = False) -> dict:
+    """Mean scores over `rows`, all and clean: {n, clean_n, seconds, all, clean}."""
+    totals: dict[str, float] = {}
+    clean_totals: dict[str, float] = {}
+    clean_n = 0
+    started = time.perf_counter()
+    for i, row in enumerate(rows, 1):
+        scores = score_one(row, k_values, strategy)
+        for key, value in scores.items():
+            totals[key] = totals.get(key, 0.0) + value
+            if not row["mentions_gold_path"]:
+                clean_totals[key] = clean_totals.get(key, 0.0) + value
+        clean_n += not row["mentions_gold_path"]
+        if progress:
+            print(f"\r  {i}/{len(rows)}", end="", flush=True)
+    if progress:
+        print(f"\r{' ' * 24}\r", end="")
+    n = len(rows)
+    keys = [f"recall@{k}" for k in k_values] + ["mrr"]
+    return {"n": n, "clean_n": clean_n, "seconds": time.perf_counter() - started,
+            "all": {k: totals.get(k, 0.0) / n if n else 0.0 for k in keys},
+            "clean": {k: clean_totals.get(k, 0.0) / clean_n if clean_n else 0.0 for k in keys}}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", default="val",
@@ -90,32 +115,15 @@ def main() -> None:
     slice_ = sorted(rows, key=lambda r: r["issue"])[: args.n]
 
     k_values = [1, 5, 10]
-    totals: dict[str, float] = {}
-    clean_totals: dict[str, float] = {}
-    clean_n = 0
-    started = time.perf_counter()
-
-    for i, row in enumerate(slice_, 1):
-        scores = score_one(row, k_values, args.strategy)
-        for key, value in scores.items():
-            totals[key] = totals.get(key, 0.0) + value
-            if not row["mentions_gold_path"]:
-                clean_totals[key] = clean_totals.get(key, 0.0) + value
-        clean_n += not row["mentions_gold_path"]
-        print(f"\r  {i}/{len(slice_)}", end="", flush=True)
-
-    elapsed = time.perf_counter() - started
-    n = len(slice_)
-    print(f"\r{' ' * 24}\r", end="")
+    result = evaluate(slice_, k_values, args.strategy, progress=True)
+    n, clean_n, elapsed = result["n"], result["clean_n"], result["seconds"]
 
     print(f"  strategy {args.strategy}   {args.split} slice n={n}   {elapsed:.0f}s")
     print("  " + "-" * 56)
     print(f"  {'':<12}{'all':>10}{'clean':>10}   (clean excludes the "
           f"{n - clean_n} rows naming a gold file)")
     for key in [f"recall@{k}" for k in k_values] + ["mrr"]:
-        a = totals.get(key, 0.0) / n
-        c = clean_totals.get(key, 0.0) / clean_n if clean_n else 0.0
-        print(f"  {key:<12}{a:>9.1%}{c:>10.1%}")
+        print(f"  {key:<12}{result['all'][key]:>9.1%}{result['clean'][key]:>10.1%}")
     print("  " + "-" * 56)
     print("\n  Record recall@10 (clean) in MEASUREMENTS.md before changing anything.")
 

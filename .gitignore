@@ -18,3 +18,6 @@ data/runs/
 
 # Verify scratch output (Phase 06b).
 data/verify_*.txt
+
+# Nightly retrieval eval history and log (Phase 07a).
+data/nightly/

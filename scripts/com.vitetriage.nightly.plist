@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs the nightly retrieval eval at 03:00. Install it yourself (it writes outside the repo):
+
+    sed "s|__REPO__|$PWD|g" scripts/com.vitetriage.nightly.plist > ~/Library/LaunchAgents/com.vitetriage.nightly.plist
+    launchctl load ~/Library/LaunchAgents/com.vitetriage.nightly.plist
+
+  Remove: launchctl unload ~/Library/LaunchAgents/com.vitetriage.nightly.plist, then delete the file.
+  Docker (Postgres) and Ollama must be running at 03:00, or the night is recorded as failed.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.vitetriage.nightly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/scripts/nightly.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardErrorPath</key>
+  <string>/tmp/vitetriage-nightly.err</string>
+</dict>
+</plist>
