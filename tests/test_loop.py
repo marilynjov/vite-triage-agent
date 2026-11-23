@@ -215,3 +215,59 @@ def test_prompt_replaces_the_grounded_first_message():
 def test_empty_tool_specs_omit_the_tools_key():
     client, _ = _run(_final([CSS]), tool_specs=[])
     assert "tools" not in client.calls[0]
+
+
+# --- prompt caching (Phase 07b) ---
+
+def _count_cache(obj) -> int:
+    if isinstance(obj, dict):
+        return ("cache_control" in obj) + sum(_count_cache(v) for v in obj.values())
+    if isinstance(obj, list):
+        return sum(_count_cache(v) for v in obj)
+    return 0
+
+
+THREE = [
+    {"role": "user", "content": "the issue"},
+    {"role": "assistant", "content": [NS(type="tool_use", id="t1", name="grep", input={})]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "out"}]},
+]
+
+
+def test_cache_marks_system_and_only_the_newest_message():
+    import copy
+    before = copy.deepcopy(THREE)
+    system, messages = loop._cached_request("SYS", THREE, True)
+    assert system == [{"type": "text", "text": "SYS", "cache_control": {"type": "ephemeral"}}]
+    assert _count_cache(messages) == 1
+    assert messages[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert _count_cache(THREE) == 0 and THREE[0] == before[0] and THREE[2] == before[2]
+
+
+def test_a_string_last_message_becomes_one_text_block_with_the_breakpoint():
+    _, messages = loop._cached_request("SYS", [{"role": "user", "content": "hi"}], True)
+    assert messages == [{"role": "user", "content": [
+        {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}]
+
+
+def test_cache_off_returns_the_request_unchanged():
+    system, messages = loop._cached_request("SYS", THREE, False)
+    assert system == "SYS" and messages is THREE
+
+
+def test_a_three_turn_run_never_sends_more_than_two_breakpoints(monkeypatch):
+    import copy
+    monkeypatch.setattr(loop.C, "PROMPT_CACHE", True)
+    sent = []
+
+    class Recording(FakeClient):
+        def create(self, **kw):
+            sent.append(copy.deepcopy({k: kw[k] for k in ("system", "messages")}))
+            return super().create(**kw)
+
+    client = Recording(_resp([_tool("a", "grep", pattern="x")]),
+                       _resp([_tool("b", "grep", pattern="y")]), _final([CSS]))
+    out = loop.run("t", "b", [_hit()], CUTOFF, client=client)
+    assert len(sent) == 3
+    assert all(_count_cache(r) == 2 for r in sent)
+    assert _count_cache(out.messages) == 0

@@ -134,6 +134,8 @@ def make_record(arm: Arm, row: dict, repeat: int, candidates: list, split: str,
                         "output_preview": t.output[:PREVIEW]} for t in trace],
         "input_tokens": sum(t.input_tokens for t in turns),
         "output_tokens": sum(t.output_tokens for t in turns),
+        "cache_read_input_tokens": sum(t.cache_read_input_tokens for t in turns),
+        "cache_creation_input_tokens": sum(t.cache_creation_input_tokens for t in turns),
         "cost_usd": cost, "latency_ms": latency_ms,
         "error": error, "split": split, "error_kind": error_kind,
     }

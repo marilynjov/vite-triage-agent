@@ -14,7 +14,8 @@ from eval.arms import ARMS
 FIELDS = {
     "arm", "repeat", "issue", "mentions_gold_path", "gold", "candidates", "picked",
     "recall_at_1", "recall_at_5", "rr", "turns", "tool_calls", "input_tokens",
-    "output_tokens", "cost_usd", "latency_ms", "error", "split", "error_kind",
+    "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+    "cost_usd", "latency_ms", "error", "split", "error_kind",
 }
 ROW = {"issue": 7, "title": "t", "body": "b", "created_at": "2024-01-02T00:00:00Z",
        "gold_files": ["b"], "mentions_gold_path": False}
@@ -449,3 +450,16 @@ def test_cli_issues_file_selects_rows(tmp_path, monkeypatch, capsys):
     f.write_text("14515, 13907\n20000\n")
     ablation.main(["--arms", "retrieval", "--issues", str(f), "--name", "y"])
     assert seen["i"] == {14515, 13907, 20000}
+
+
+def test_record_sums_cache_tokens():
+    def turn(read, made):
+        return Turn(input_tokens=10, output_tokens=5, cache_creation_input_tokens=made,
+                    cache_read_input_tokens=read, stop_reason="end_turn", request_id=None,
+                    latency_ms=1, cost_usd=Decimal("0.01"))
+
+    def fn(title, body, candidates, cutoff, **kw):
+        return Run(result=NS(suspected_files=["b"]), turns=[turn(10, 20), turn(0, 5)], trace=[])
+
+    rec = ablation.make_record(ARMS["agent"], ROW, 0, ["a", "b"], "val", run_fn=fn)
+    assert rec["cache_read_input_tokens"] == 10 and rec["cache_creation_input_tokens"] == 25

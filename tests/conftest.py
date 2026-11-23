@@ -14,3 +14,11 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "docker" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _no_prompt_cache(monkeypatch):
+    """Requests keep their pre-caching shape in tests (system a string, content as sent);
+    the caching tests turn it on themselves."""
+    import api.config
+    monkeypatch.setattr(api.config, "PROMPT_CACHE", False)

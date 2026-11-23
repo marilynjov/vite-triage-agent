@@ -20,6 +20,8 @@ Two rules the API enforces and this loop obeys:
 """
 from __future__ import annotations
 
+import copy
+
 import logging
 import time
 from dataclasses import dataclass, field
@@ -186,6 +188,25 @@ def _record_turn(response: Any, latency_ms: int) -> Turn:
     )
 
 
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+def _cached_request(system: str, messages: list[dict], cache: bool):
+    """The system and messages to send, with two cache breakpoints when `cache` is on:
+    the system prompt (tools come before it in the prefix, so they are covered too) and
+    the last block of the newest message, so each turn reads everything before it.
+
+    The breakpoints go on copies. The history the loop keeps stays append-only and
+    free of cache_control, so earlier turns' breakpoints never pile up past the API's 4."""
+    if not cache:
+        return system, messages
+    last = copy.deepcopy(messages[-1])
+    if isinstance(last["content"], str):
+        last["content"] = [{"type": "text", "text": last["content"]}]
+    last["content"][-1]["cache_control"] = _EPHEMERAL
+    return ([{"type": "text", "text": system, "cache_control": _EPHEMERAL}],
+            [*messages[:-1], last])
+
 def run(
     title: str,
     body: str,
@@ -249,13 +270,14 @@ def run(
         _emit(on_event, {"type": "step_started", "turn": turn})
         started = time.perf_counter()
         try:
+            sent_system, sent_messages = _cached_request(system, out.messages, C.PROMPT_CACHE)
             request: dict[str, Any] = dict(
                 model=C.ANTHROPIC_MODEL,
                 max_tokens=C.MAX_TOKENS,
-                system=system,
+                system=sent_system,
                 output_config={"format": {"type": "json_schema",
                                           "schema": schema}},
-                messages=out.messages,
+                messages=sent_messages,
             )
             if tool_specs:
                 request["tools"] = tool_specs

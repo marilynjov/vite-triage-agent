@@ -38,6 +38,9 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-5-5")
 # Output ceiling. Hitting it truncates mid-thought and you pay for the call
 # anyway, so keep it generous.
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "16000"))
+# Prompt caching (Phase 07b): the agent loop marks the system prompt and the newest
+# message as cache breakpoints. 0 sends requests exactly as before.
+PROMPT_CACHE = os.getenv("PROMPT_CACHE", "1") == "1"
 
 # How many retrieved files /triage/grounded shows the model. 10 matches the
 # recall@10 that bounds what the model can find.
