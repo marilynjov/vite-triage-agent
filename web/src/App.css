@@ -496,3 +496,17 @@ button.secondary {
     padding: 12px 16px;
   }
 }
+
+/* Phase 07a: the eval dashboard. Plain tables, the trace table's styles. */
+.eval-section {
+  margin: 0 0 28px;
+  text-align: left;
+}
+
+.eval-section h2 {
+  margin-bottom: 8px;
+}
+
+.eval-changed {
+  background: rgba(240, 173, 78, 0.16);
+}

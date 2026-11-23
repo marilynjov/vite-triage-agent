@@ -17,6 +17,7 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import { API } from './api'
 import { parseHash, type Route } from './router'
 import { RunsView } from './runs'
+import { EvalView } from './evalView'
 import type { LiveEvent, TriageResult } from './types.generated'
 import {
   initialLiveState,
@@ -509,7 +510,7 @@ function TriageView() {
 }
 
 /**
- * Two views from the hash. Triage stays mounted while hidden, so a live run's
+ * Three views from the hash. Triage stays mounted while hidden, so a live run's
  * stream and the typed issue survive a trip to the run browser and back.
  */
 export default function App() {
@@ -526,11 +527,13 @@ export default function App() {
       <header className="views">
         <a href="#/" aria-current={route.view === 'triage' ? 'page' : undefined}>Triage</a>
         <a href="#/runs" aria-current={route.view === 'runs' ? 'page' : undefined}>Runs</a>
+        <a href="#/eval" aria-current={route.view === 'eval' ? 'page' : undefined}>Eval</a>
       </header>
       <div hidden={route.view !== 'triage'}>
         <TriageView />
       </div>
       {route.view === 'runs' && <RunsView issue={route.issue} repeat={route.repeat} />}
+      {route.view === 'eval' && <EvalView />}
     </>
   )
 }
