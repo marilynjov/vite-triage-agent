@@ -1,0 +1,20 @@
+{"issue": 14009, "repeat": 0, "category": "stopped-at-the-symptom", "note": "Read resolveServerUrls in utils.ts, where the stack trace points; gold cli.ts was not a candidate and no search reached it."}
+{"issue": 14109, "repeat": 0, "category": "didnt-look-past-candidates", "note": "Gold importAnalysis.ts was not among the 10 candidates; answered in 1 turn with no tool call, picking the files named like 'sourcemap'."}
+{"issue": 14271, "repeat": 0, "category": "stopped-at-the-symptom", "note": "The wrong output is the manifest, so it picked manifest.ts; gold build.ts was candidate 2 and one grep for cssEntriesMap did not move it."}
+{"issue": 15018, "repeat": 0, "category": "didnt-look-past-candidates", "note": "Gold importAnalysis.ts was not a candidate; 1 turn, no tool call, guessed the dep optimizer for a dev/prod difference."}
+{"issue": 15022, "repeat": 0, "category": "right-file-not-first", "note": "Found gold htmlFallback.ts by grep (it was not a candidate) and read it, but ranked preview.ts and indexHtml.ts above it."}
+{"issue": 15177, "repeat": 0, "category": "vague-report", "note": "Perf regression with 'TODO' as the repro and no logs; no tool call; gold transform.ts was its 3rd pick."}
+{"issue": 15284, "repeat": 0, "category": "vague-report", "note": "The report is a screenshot, a repo link and a debug log; nothing in the text points at scan.ts, which was not a candidate."}
+{"issue": 15542, "repeat": 0, "category": "no-answer", "note": "Returned an empty suspected_files list in 1 turn; gold importAnalysis.ts was candidate 3."}
+{"issue": 15607, "repeat": 0, "category": "stopped-at-the-symptom", "note": "The reporter quotes and links moduleGraph.ts, and the agent put it first; gold importAnalysis.ts was its 2nd pick."}
+{"issue": 15660, "repeat": 0, "category": "didnt-look-past-candidates", "note": "Gold packages.ts was not a candidate; 1 turn, no tool call, answered build.ts alone."}
+{"issue": 15694, "repeat": 0, "category": "right-file-not-first", "note": "Grepped isPreview and read config.ts, then ranked config.ts above gold preview.ts (its 2nd pick, candidate 1)."}
+{"issue": 15945, "repeat": 0, "category": "stopped-at-the-symptom", "note": "The reporter links static.ts (safeModulePaths) and the agent took it; gold server/index.ts was candidate 3."}
+{"issue": 17341, "repeat": 0, "category": "didnt-look-past-candidates", "note": "Gold static.ts was not a candidate; 1 turn, no tool call, picked transform.ts and env.ts for an env-var symptom."}
+{"issue": 17407, "repeat": 0, "category": "didnt-look-past-candidates", "note": "Gold asset.ts was not a candidate; 1 turn, no tool call, picked build.ts for a library-mode build bug."}
+{"issue": 17508, "repeat": 0, "category": "no-answer", "note": "Run rejected: it named packages/vite/types/customEvent.d.ts, a sensible place for the type but outside the scored scope; gold importAnalysisBuild.ts was candidate 8."}
+{"issue": 17900, "repeat": 0, "category": "right-file-not-first", "note": "Picked css.ts first for a LightningCSS error and gold build.ts second (candidate 2), with no tool call."}
+{"issue": 18223, "repeat": 0, "category": "didnt-look-past-candidates", "note": "All 4 gold files (module-runner, fetchModule.ts) were outside the candidates; 1 turn, no tool call."}
+{"issue": 18244, "repeat": 0, "category": "right-file-not-first", "note": "The issue names injectQuery; 8 tool calls read its definition in utils.ts (gold), but client.ts was ranked first."}
+{"issue": 18489, "repeat": 0, "category": "other", "note": "A feature request (an option to disable the WebSocket) whose fix touches 7 files; gold hmr.ts was its 2nd pick, so no single file is the answer."}
+{"issue": 18527, "repeat": 0, "category": "stopped-at-the-symptom", "note": "The stack trace ends in openBrowser.ts and the agent picked it alone; the 4 gold files are the watcher and server, candidate 8 at best."}

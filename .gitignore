@@ -21,3 +21,6 @@ data/verify_*.txt
 
 # Nightly retrieval eval history and log (Phase 07a).
 data/nightly/
+
+# Failure taxonomy reading copy (Phase 07a); regenerate with python -m eval.taxonomy sample.
+data/taxonomy-sample.md
