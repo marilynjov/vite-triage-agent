@@ -18,10 +18,11 @@ OUT = ROOT / "web" / "src" / "types.generated.ts"
 
 sys.path.insert(0, str(ROOT))
 from api.schema import (  # noqa: E402
-    Done, Edit, Failed, Fault, GroundedTriageResult, HypothesisResult, LiveCandidate,
+    ArmRow, Done, Edit, EvalSummary, Failed, Fault, GroundedTriageResult, HypothesisResult, LiveCandidate,
     LocatedFile, LocateResult, PatchView, RealFix, Region, RunStarted, StagedRunDetail,
     StagedRunSummary, StagedStages, StepStarted, StoredToolCall, ToolCall, ToolCalled,
-    ToolReturned, Totals, TriageResult, UnderstandResult, Usage, VerifyView,
+    NightlyPoint, Share, TaxonomyCount, ToolReturned, Totals, TriageResult, UnderstandResult,
+    Usage, VerifyView,
 )
 
 LIVE_MEMBERS = [RunStarted, StepStarted, Usage, ToolCalled, ToolReturned, Done, Failed]
@@ -30,6 +31,7 @@ LIVE_PARTS = [Totals, LiveCandidate]
 STAGED_MODELS = [LocatedFile, LocateResult, Region, UnderstandResult, Fault, HypothesisResult,
                  Edit, StagedStages, StoredToolCall, VerifyView, PatchView, RealFix,
                  StagedRunSummary, StagedRunDetail]
+EVAL_MODELS = [NightlyPoint, ArmRow, Share, TaxonomyCount, EvalSummary]
 
 
 def named_defs(models: list) -> dict:
@@ -85,6 +87,7 @@ def main() -> None:
         "ToolCall": ToolCall.model_json_schema(),
         **live_defs(),
         **named_defs(STAGED_MODELS),
+        **named_defs(EVAL_MODELS),
     }
 
     try:

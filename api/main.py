@@ -21,8 +21,8 @@ from retrieval import config as R, search
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from . import config as C, cost, db, live, staged_runs, triage
-from .schema import StagedRunDetail, StagedRunSummary
+from . import config as C, cost, db, eval_summary, live, staged_runs, triage
+from .schema import EvalSummary, StagedRunDetail, StagedRunSummary
 from .models import (
     AgentTriageRequest,
     AgentTriageResponse,
@@ -581,3 +581,11 @@ async def run_events(run_id: str, request: Request, after: int = 0):
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/eval/summary", response_model=EvalSummary)
+def eval_summary_route() -> EvalSummary:
+    """The dashboard's numbers from stored eval files: nightly retrieval, arms, staged and
+    patch outcomes, the failure taxonomy. No model call; a bad file empties one section."""
+    return eval_summary.summary()
+

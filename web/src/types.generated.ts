@@ -409,3 +409,59 @@ export interface StagedRunDetail {
   patch: PatchView | null;
   real_fix: RealFix | null;
 }
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "NightlyPoint".
+ */
+export interface NightlyPoint {
+  at: string;
+  ok: boolean;
+  strategy: string;
+  n: number;
+  recall_at_10_clean: number | null;
+  mrr_clean: number | null;
+  changed: boolean;
+  error: string | null;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "ArmRow".
+ */
+export interface ArmRow {
+  arm: string;
+  runs: number;
+  recall_at_1: number;
+  recall_at_5: number;
+  mrr: number;
+  per_triage: number | null;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "Share".
+ */
+export interface Share {
+  name: string;
+  n: number | null;
+  share: number;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "TaxonomyCount".
+ */
+export interface TaxonomyCount {
+  category: string;
+  n: number;
+}
+/**
+ * This interface was referenced by `TriageResult`'s JSON-Schema
+ * via the `definition` "EvalSummary".
+ */
+export interface EvalSummary {
+  nightly: NightlyPoint[];
+  arms_source: string;
+  arms: ArmRow[];
+  staged_outcomes: Share[];
+  patch_outcomes: Share[];
+  patch_pass_rate: number | null;
+  taxonomy: TaxonomyCount[];
+}

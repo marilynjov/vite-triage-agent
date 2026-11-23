@@ -369,3 +369,56 @@ class StagedRunDetail(StagedRunSummary):
     tool_calls: list[StoredToolCall]
     patch: PatchView | None
     real_fix: RealFix | None
+
+
+# --- Phase 07a: the eval dashboard (GET /eval/summary) --------------------------------
+
+class NightlyPoint(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    at: str
+    ok: bool
+    strategy: str
+    n: int
+    recall_at_10_clean: float | None
+    mrr_clean: float | None
+    changed: bool
+    error: str | None
+
+
+class ArmRow(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    arm: str
+    runs: int
+    recall_at_1: float
+    recall_at_5: float
+    mrr: float
+    per_triage: float | None
+
+
+class Share(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    name: str
+    n: int | None
+    share: float
+
+
+class TaxonomyCount(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    category: str
+    n: int
+
+
+class EvalSummary(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    nightly: list[NightlyPoint]
+    arms_source: str
+    arms: list[ArmRow]
+    staged_outcomes: list[Share]
+    patch_outcomes: list[Share]
+    patch_pass_rate: float | None
+    taxonomy: list[TaxonomyCount]
