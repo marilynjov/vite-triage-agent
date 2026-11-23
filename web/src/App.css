@@ -344,8 +344,14 @@ button.secondary {
   margin-bottom: 12px;
 }
 
+.run-filters {
+  text-align: left; /* #root centres text */
+}
+
+/* The Triage form's global label stacks its text over the control; side by side here. */
 .run-filters label {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
 }
@@ -478,9 +484,9 @@ button.secondary {
   padding: 0 8px;
 }
 
-.dl.add { background: rgba(60, 154, 95, 0.15); }
-.dl.del { background: rgba(217, 83, 79, 0.15); }
-.dl.hunk { color: var(--accent); }
+.dl.add { background: rgba(60, 154, 95, 0.28); box-shadow: inset 3px 0 #3c9a5f; }
+.dl.del { background: rgba(217, 83, 79, 0.28); box-shadow: inset 3px 0 #d9534f; }
+.dl.hunk { color: var(--text); opacity: 0.75; }
 
 .run-tools {
   margin-top: 24px;
