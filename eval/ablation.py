@@ -11,7 +11,9 @@ as in production it would be a 500, and it keeps the turns and cost it paid for.
 
 Retrieval runs once per row, and only when one of that row's jobs actually
 runs; the model arms get the same candidates, so arms differ only in prompt
-and tools. The test split is refused: it is read once, at the end.
+and tools. The test split is read once, at the end: only with --open-test, and only
+for a run that eval/seal.py allows (two declared names, a clean tree, the commit
+recorded).
 """
 from __future__ import annotations
 
@@ -277,6 +279,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="file of issue ids: run exactly these rows (--n is ignored)")
     ap.add_argument("--report", metavar="PATH",
                     help="print the report for an existing run file and exit")
+    ap.add_argument("--open-test", action="store_true",
+                    help="read the sealed test split, for a run eval/seal.py declares")
     ap.add_argument("--max-dollars", type=float, default=3.0,
                     help="cap on the run file's lifetime spend: refuse to start if what the "
                          "file already spent plus the estimate exceeds it; stop if the total passes it")
@@ -285,8 +289,10 @@ def main(argv: list[str] | None = None) -> None:
         from . import ablation_report
         ablation_report.main(args.report)
         return
-    if args.split == "test":
-        sys.exit("refusing the test split: it is read once, at the end")
+    if args.split == "test" and not args.open_test:
+        sys.exit("refusing the test split: it is read once, at the end (--open-test)")
+    if args.open_test and args.split != "test":
+        sys.exit("--open-test is only for --split test")
     names = args.arms.split(",")
     unknown = [a for a in names if a not in ARMS]
     if unknown:
@@ -300,6 +306,10 @@ def main(argv: list[str] | None = None) -> None:
     if any(ARMS[a].system is not None or ARMS[a].kind == "pipeline" for a in names) and C.PROVIDER != "anthropic":
         sys.exit("model arms need PROVIDER=anthropic")
 
+    if args.split == "test":
+        from . import seal
+        entry = seal.open_test(path.stem)
+        print(f"  test split opened for {path.stem} at {entry['commit'][:7]} ({entry['opened_at']})")
     rows = (val_rows(args.split, args.n, read_issue_ids(args.issues)) if args.issues
             else val_rows(args.split, args.n))
     regions = None
