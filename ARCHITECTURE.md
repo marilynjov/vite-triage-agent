@@ -645,7 +645,8 @@ three parameters section 9 added:
 One image, `vite-triage-verify:node18` (`eval/docker/Dockerfile`: `node:18`
 with corepack enabled). Two volumes: `vtr-work` holds one base per issue at
 `/work/<issue>`, and `vtr-store` holds the pnpm store and corepack's cache,
-shared by every base. The Vite clone is mounted read-only at `/repo`.
+shared by every base. The Vite clone is mounted read-only at `/repo` for
+`prepare` only.
 
 - **`prepare(fix)`, network on.** `git archive` the pre-fix commit into
   `/work/<issue>`, commit it to a fresh git repo (so it can be reset), `pnpm
@@ -653,12 +654,19 @@ shared by every base. The Vite clone is mounted read-only at `/repo`.
   ./packages/vite run build-bundle`: vitest imports the workspace's vite from
   its `dist`, as Vite's own CI builds before `test-unit`. Every step ends in
   `|| fail`, which removes the directory; `.ready` is written only after all
-  succeed, and a base that has it is reused as is.
+  succeed, and a base that has it is reused as is. The base is then chowned to
+  uid 1000 (`node`), also when an existing base is reused, so a base an older
+  root-only version prepared still resets under a non-root test run.
 - **`run_tests(fix, files, delete)`, network off.** Reset the base (`git reset
   --hard`, `git clean -fd`; no `-x`, so `node_modules` and `dist` stay), delete
-  `delete`, untar `files` from stdin over it, and run `pnpm exec vitest run` on
-  the fix's specs under `timeout`. The container gets `--network none`, `--cpus
-  4`, `--memory 4g` and 300 s. Resetting at the start, not the end, is what
+  `delete`, untar `files` from stdin over it, and run `./node_modules/.bin/vitest
+  run` on the fix's specs under `timeout`. The test run is the step where code a
+  model wrote is executed, so it is sandboxed (Phase 07a): it mounts only its own
+  base (a `volume-subpath` mount at `/work/<issue>`, so no other base, no store and
+  no clone), runs as uid 1000 with `--cap-drop ALL`, `no-new-privileges` and
+  `--pids-limit 512`, plus `--network none`, `--cpus 4`, `--memory 4g` and 300 s.
+  With no store there is no corepack cache, which is why vitest is called directly
+  rather than through pnpm. Resetting at the start, not the end, is what
   keeps a crashed or killed run from leaking into the next. Runs on one base
   must not overlap, so callers hold `container.LOCK`.
 - **`discard(fix)`** removes the base. A base is 2–3 GB of `node_modules` and
@@ -782,12 +790,11 @@ migration.
 
 ## Where the next phases attach
 
-Phase 07 should also tighten the test-container sandbox: mount only `/work/<issue>` and no `/store` for test runs, run non-root, and add `--pids-limit`. Today it has network none, 4 CPUs, 4 GB and a 300 s timeout, but the shared volumes are mounted read-write as root.
-
 | Phase | Attaches at |
 |---|---|
 | 05 Agent loop | done: the A/B (`eval/ablation.py`), budgets and the live run (section 8) |
 | 06 Workflow, Piece A | done: staged analysis and attribution (section 9), eval-only |
 | 06 Workflow, Piece B | done: patch and verify against each fix's pre-fix commit, fail-to-pass in Docker (section 10), eval-only |
-| 06 Workflow, Piece C | next: the stage-segmented trace and a diff viewer in the UI. The viewer can show the `diff` each patch record already stores. A stage can emit through the same `on_event` seam and `LiveEvent` union, so the trace panel gains stages without a new transport; this is also where staged runs would reach `/runs` |
-| 07 Production | cache columns in `calls`, nightly `eval.retrieve`, the test split, the second corpus as a held-out generalization check. Also where the live run's limits get revisited: a shared registry (or an events table) for more than one process, and auth |
+| 06 Workflow, Piece C | done: the run browser at `#/runs` (stored staged runs stage by stage, the agent's diff beside the real fix's). Live stage events through `on_event` and `LiveEvent` are still open; that is where staged runs would reach `/runs` |
+| 07 Production, Piece A | done, $0: the sandboxed test container (section 10), the nightly retrieval eval (`eval/nightly.py`), the hand-labelled failure taxonomy (`docs/failure-taxonomy.md`), the eval dashboard (`GET /eval/summary`, `#/eval`) and one-command startup (`scripts/dev.py`) |
+| 07 Production, Piece B | next, needs credit: prompt caching through the cache columns in `calls`, a cheaper-model rerun, then the test split, opened once. Also open: the second corpus as a held-out generalization check, and the live run's limits (a shared registry or an events table for more than one process, and auth) |

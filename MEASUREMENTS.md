@@ -997,3 +997,54 @@ the rates by outcome.* That much is measured.
   may have seen it.
 - One attempt per hypothesis, blind. A retry on test output would leak the
   answer key, so it is out of scope.
+
+---
+
+## Phase 07a — free production work (2026-11-23)
+
+No model call and no spend. Four measurements came out of it.
+
+**Nightly retrieval, first records.** `python -m eval.nightly` scores
+`fixed_v1_header` on all 206 val rows and appends one record a run to
+`data/nightly/retrieve.jsonl`. It ran twice in a row:
+
+| n | clean n | clean recall@10 | clean MRR | wall clock | second run |
+|---|---|---|---|---|---|
+| 206 | 175 | 68.5% | 43.8% | 37 s | identical, exit 0 |
+
+68.5% is the Phase 03 number, so the index and the code still agree with
+what was measured then. Retrieval is deterministic, so from here any change
+in a nightly record is a real change (exit 1), not noise.
+
+**Sandboxed verify.** Test runs now see only their own base (no shared store,
+no clone), as uid 1000, with capabilities dropped and 512 processes at most.
+`RUN_DOCKER=1 pytest -m docker tests/test_verify_docker.py` passes 5 of 5 for
+#14515, including a new check that the container sees only its base and
+writes to it as uid 1000. The harness gives #17676 the same verdict as in
+06b (valid: the gold tests fail before the fix and pass with it) in 2.1 s of
+tests. One side effect: vitest is now called directly instead of through
+`pnpm exec`, so a real test run finishes in about a second, and the Docker
+timeout test now uses a spec that sleeps.
+
+**Failure taxonomy.** 20 of the 67 clean `agent` misses on all 206 val rows,
+sampled with seed 0 and read by hand ([docs/failure-taxonomy.md](docs/failure-taxonomy.md);
+the labels are a draft for review):
+
+| category | n |
+|---|---|
+| didnt-look-past-candidates | 6 |
+| stopped-at-the-symptom | 5 |
+| right-file-not-first | 4 |
+| no-answer | 2 |
+| vague-report | 2 |
+| other | 1 |
+
+In 10 of the 20 the gold file was outside retrieval's top 10, and in 7 of
+those 10 the agent made no tool call. 13 of the 20 made no tool call at all.
+The largest category is one the agent could have avoided by searching. A
+blanket "look first" nudge did not help in Phase 05a, so the next experiment
+is a conditional one (07b, paid).
+
+**Caveats.** One repeat and one labeller; 20 of 67 failures. The agent is
+nondeterministic per run (Phase 04), so the same issue can fail differently
+on another run.

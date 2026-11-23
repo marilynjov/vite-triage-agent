@@ -22,7 +22,8 @@ the top k the system proposed?
 | 03→04 Grounded triage | the model re-ranks retrieval's top 10 | recall@1 24.1% → 44.5% (206 rows) |
 | 04 Tools | four git tools at the pinned commit, a hand-written tool-use loop, `/triage/agent`, a trace in the UI | recall@1 41.5% vs grounded 30.4% (40 rows), but 26/40 runs used no tools |
 | 05 The agent loop | Piece A, [does looking pay?](docs/superpowers/specs/2026-11-01-phase-05a-does-looking-pay-design.md), is answered; Pieces B+C are done: a live run streamed to the UI, and token, time and dollar budgets ([spec](docs/superpowers/specs/2026-11-01-phase-05bc-live-run-design.md)) | clean recall@1 on 206 rows: 24.1% retrieval, 45.2% grounded, 53.1% agent (agent vs grounded paired interval excludes 0), $0.0031 vs $0.0018 per triage |
-| 06 Multi-step workflow | Piece A, [staged analysis](docs/superpowers/specs/2026-11-02-phase-06a-staged-analysis-design.md): locate → understand → hypothesize under one budget, each run attributed to the stage that lost it against `git blame` gold regions; Piece B, [patch and verify](docs/superpowers/specs/2026-11-02-phase-06b-patch-verify-design.md): a patch stage writes edits against the commit before the fix, graded fail-to-pass on the real fix's unit tests in Docker; Piece C (stage trace and diff viewer in the UI) is next | understand fails most: 25.8% of clean runs lost there (miss + error), vs 16.7% locate, 13.6% hypothesize (40 rows × 2). half of it budget stops, which a per-stage token share and more understand turns would target (a reading, not yet measured). Staged vs agent recall@1 −1.4 pts, interval spans 0, at ~4× the cost. Patch: 29 of 43 unit-tested issues valid; 6 of 25 patchable runs pass (24%), $0.020 per pass; hits pass 3/20, misses 3/9, too few runs to separate them |
+| 06 Multi-step workflow | Piece A, [staged analysis](docs/superpowers/specs/2026-11-02-phase-06a-staged-analysis-design.md): locate → understand → hypothesize under one budget, each run attributed to the stage that lost it against `git blame` gold regions; Piece B, [patch and verify](docs/superpowers/specs/2026-11-02-phase-06b-patch-verify-design.md): a patch stage writes edits against the commit before the fix, graded fail-to-pass on the real fix's unit tests in Docker; Piece C: the run browser at `#/runs` | understand fails most: 25.8% of clean runs lost there (miss + error), vs 16.7% locate, 13.6% hypothesize (40 rows × 2). half of it budget stops, which a per-stage token share and more understand turns would target (a reading, not yet measured). Staged vs agent recall@1 −1.4 pts, interval spans 0, at ~4× the cost. Patch: 29 of 43 unit-tested issues valid; 6 of 25 patchable runs pass (24%), $0.020 per pass; hits pass 3/20, misses 3/9, too few runs to separate them |
+| 07 Production, Piece A ($0) | a sandboxed test container, a nightly retrieval eval, a hand-labelled [failure taxonomy](docs/failure-taxonomy.md), the `#/eval` dashboard, one-command startup; Piece B (caching, a cheaper model, the test split) needs credit | nightly clean recall@10 68.5% (206 rows), unchanged since Phase 03. Of 20 sampled agent misses, 6 never looked past retrieval's top 10 and 5 stopped where the symptom shows |
 
 Every number, with its caveats, is in [MEASUREMENTS.md](MEASUREMENTS.md). How
 the pieces fit and why each boundary is where it is: [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -45,12 +46,25 @@ python -m mining all               # labeled dataset, pinned commit, splits (see
 python -m retrieval.index --strategy fixed_v1_header
 ```
 
-Run the app:
+Run the app with one command (it checks Docker, Ollama, the ports and the
+installs first, and prints the fix for anything missing; Ctrl-C stops both servers):
 
 ```bash
+.venv/bin/python scripts/dev.py                 # API :8000, web http://localhost:5173
+```
+
+Or by hand:
+
+```bash
+docker compose up -d
 PROVIDER=anthropic python -m uvicorn api.main:app --port 8000 --reload
 cd web && npm ci && npm run dev                 # http://localhost:5173
 ```
+
+Three views: **Triage** (below), **Runs** (`#/runs`, the stored staged runs stage by
+stage with the agent's diff beside the real fix's) and **Eval** (`#/eval`, the
+dashboard: nightly retrieval, the arms, staged and patch outcomes, the failure
+taxonomy, all read from stored files).
 
 The page has three buttons. **Prose (Phase 01)** and **Typed triage** see only
 the issue. **Agent (live)** also gets retrieval's top 10 files and four read-only tools,
@@ -87,8 +101,25 @@ comparable. The test split stays sealed until Phase 07.
 | `PROVIDER=anthropic python -m eval.patch_eval --max-dollars 0.55` | a patch for every stored staged hypothesis on a valid issue, verified fail-to-pass; `python -m eval.patch_report` summarises it | ~$0.12 |
 | `python -m eval.ablation --report PATH` | scores, paired intervals, cost and tool use from a run file | free |
 | `PROVIDER=anthropic python -m agent.explain <issue#>` | one run's message array, turn by turn | ~$0.01 |
+| `python -m eval.nightly` | retrieval on all val rows, appended to `data/nightly/retrieve.jsonl`; exit 0 same, 1 a metric moved, 2 failed | free |
+| `python -m eval.taxonomy sample` / `report` | the 20 sampled agent misses to read, and the counts of their hand labels | free |
 | `python -m pytest -q` | the test suite; no paid calls | free |
 | `cd web && npm ci && npm test` | the frontend tests (Vitest), including the live-trace reducer | free |
+
+### Nightly eval
+
+Retrieval makes no model call, so it can run every night for free. It is
+deterministic for a given index, pin and strategy, so any moved metric means
+the code or the index changed. To schedule it at 03:00 with launchd (Docker and
+Ollama must be running then, or the night is recorded as failed):
+
+```bash
+sed "s|__REPO__|$PWD|g" scripts/com.vitetriage.nightly.plist > ~/Library/LaunchAgents/com.vitetriage.nightly.plist
+launchctl load ~/Library/LaunchAgents/com.vitetriage.nightly.plist
+```
+
+Each run appends one record to `data/nightly/retrieve.jsonl` and a line to
+`data/nightly/nightly.log`; the dashboard shows the last 30.
 
 ## Another repo
 
