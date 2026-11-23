@@ -12,6 +12,7 @@ val split.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,11 +26,30 @@ STRATEGY = "fixed_v1_header"
 K_VALUES = [1, 5, 10]
 EPS = 1e-9
 
+log = logging.getLogger(__name__)
+
 
 def load_history(path: Path = HISTORY) -> list[dict]:
+    """Every record; a line that doesn't parse (a crash or full disk mid-append) is skipped."""
     if not path.exists():
         return []
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    out = []
+    for i, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            log.warning("%s:%d: skipped a line that does not parse", path, i)
+    return out
+
+
+def _append(path: Path, rec: dict) -> None:
+    """Append one line, first ending a partial last line so the record stands alone."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.exists() and path.stat().st_size > 0 and not path.read_bytes().endswith(b"\n")
+    with path.open("a") as f:
+        f.write(("\n" if partial else "") + json.dumps(rec) + "\n")
 
 
 def compare(prev: dict | None, cur: dict) -> bool:
@@ -49,21 +69,20 @@ def _baseline(history: list[dict], pin: str, n: int) -> dict | None:
 
 def run(*, evaluate=None, path: Path = HISTORY, now: datetime | None = None) -> int:
     evaluate = evaluate or retrieve.evaluate
-    pin = M.PINNED_SHA.read_text().strip()
-    rows = [json.loads(l) for l in (M.SPLIT_DIR / "val.jsonl").read_text().splitlines() if l]
     rec = {"at": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
-           "ok": True, "pin": pin, "strategy": STRATEGY, "n": len(rows), "clean_n": 0,
+           "ok": True, "pin": "", "strategy": STRATEGY, "n": 0, "clean_n": 0,
            "all": {}, "clean": {}, "seconds": 0.0, "changed": False, "error": None}
-    try:
+    try:  # setup too: a missing pin or split is a failed night, recorded, not a crash
+        rec["pin"] = M.PINNED_SHA.read_text().strip()
+        rows = [json.loads(l) for l in (M.SPLIT_DIR / "val.jsonl").read_text().splitlines() if l]
+        rec["n"] = len(rows)
         result = evaluate(rows, K_VALUES, STRATEGY)
         rec.update({k: result[k] for k in ("n", "clean_n", "seconds", "all", "clean")})
     except Exception as exc:  # a 3 a.m. run with the database down is a record, not a crash
         rec.update(ok=False, error=f"{type(exc).__name__}: {exc}")
     if rec["ok"]:
-        rec["changed"] = compare(_baseline(load_history(path), pin, rec["n"]), rec)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as f:
-        f.write(json.dumps(rec) + "\n")
+        rec["changed"] = compare(_baseline(load_history(path), rec["pin"], rec["n"]), rec)
+    _append(path, rec)
     if not rec["ok"]:
         print(f"{rec['at']} FAILED: {rec['error']}")
         return 2
@@ -74,4 +93,9 @@ def run(*, evaluate=None, path: Path = HISTORY, now: datetime | None = None) -> 
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    try:
+        code = run()
+    except Exception as exc:  # never exit 1 ("changed") for a crash
+        print(f"FAILED: {type(exc).__name__}: {exc}")
+        code = 2
+    sys.exit(code)

@@ -66,3 +66,21 @@ def test_nightly_reads_only_the_val_split(tmp_path, monkeypatch):
     nightly.run(evaluate=fake(), path=tmp_path / "h.jsonl")
     assert any(s.endswith("val.jsonl") for s in seen)
     assert not [s for s in seen if "splits/test" in s or "splits/train" in s]
+
+
+def test_a_partial_line_is_skipped_and_the_next_record_lands_on_its_own_line(tmp_path):
+    path = tmp_path / "h.jsonl"
+    assert nightly.run(evaluate=fake(), path=path) == 0
+    with path.open("a") as f:
+        f.write('{"at": "x", "ok": tr')  # a crash or full disk mid-append
+    assert nightly.run(evaluate=fake(), path=path) == 0  # still compared with the good record
+    recs = nightly.load_history(path)
+    assert len(recs) == 2 and all(r["ok"] for r in recs)
+
+
+def test_a_setup_failure_is_a_failed_record_and_exit_2(tmp_path, monkeypatch):
+    monkeypatch.setattr(nightly.M, "PINNED_SHA", tmp_path / "missing_pin.txt")
+    path = tmp_path / "h.jsonl"
+    assert nightly.run(evaluate=fake(), path=path) == 2
+    (rec,) = nightly.load_history(path)
+    assert rec["ok"] is False and "missing_pin.txt" in rec["error"]
