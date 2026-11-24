@@ -2,5 +2,9 @@
   "test-final": {
     "opened_at": "2026-11-24T00:12:15+00:00",
     "commit": "0bfcf10a94b8eb774d92e532c1082eff784fe77d"
+  },
+  "test-staged-n40": {
+    "opened_at": "2026-11-24T00:27:09+00:00",
+    "commit": "2f9ab69c299243eae977466fab5367e421b09ed6"
   }
 }
