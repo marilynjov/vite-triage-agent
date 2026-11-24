@@ -1169,9 +1169,27 @@ because its stages run many turns (8.2 on average).
 
 ### Grounded triage on the local model (all 206 val rows)
 
-Pending: `PROVIDER=ollama python -m eval.grounded --split val --n 206` is
-running at about 1.6 minutes per issue. At 113 of 206, 24 answers broke the
-contract (21%).
+Haiku 5.5 is already the cheapest Claude model, so the cheaper model is the
+free local `qwen2.5-coder:7b`. Grounded triage is the only model arm that runs
+on Ollama; tool use is Anthropic-only.
+`PROVIDER=ollama python -m eval.grounded --split val --n 206` (20,209 s, about
+5.6 hours, $0):
+
+| clean (175) | retrieval | qwen grounded | Haiku grounded (`val-n206-r1`) |
+|---|---|---|---|
+| recall@1 | 24.1% | **21.0%** | 45.2% |
+| recall@5 | 54.0% | 35.7% | — |
+| MRR | 43.8% | 32.0% | — |
+| contract violations | — | 33 of 206 (16%) | — |
+
+**The local model makes retrieval worse, not better.** Re-ranking the same 10
+candidates, qwen's top pick is right less often than retrieval's own order
+(21.0% against 24.1%), and recall@5 falls 18 points. Haiku more than doubles
+retrieval's recall@1 on the same rows. 33 answers broke the contract (31 named a
+file outside the candidates, 2 failed validation), and 58 of 206 rows named no
+file at all. That confirms the 40-row reading from Phase 03 (9 of 40 invented
+paths) on all of val: at 7B, grounded re-ranking is not worth running, and the
+cheapest model that pays is Haiku, at $0.0017 a triage.
 
 ### Caveats
 
