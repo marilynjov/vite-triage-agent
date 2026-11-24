@@ -195,7 +195,7 @@ route ─► triage.py (owns the prompt) ─► providers.complete[_structured] 
   API's own message array.
 - **`calls` table.** One row per model call, written on success *and*
   failure. Cache-token columns have existed since day one, so Phase 07's
-  caching gate needs no migration. `GET /calls` reads it back. The agent's two routes tag their rows with
+  caching gate needed no migration. `GET /calls` reads it back. The agent's two routes tag their rows with
   their own `endpoint` (`/triage/agent`, `/runs`), so the two paths stay
   separable in the table.
 - **Routes.** `POST /triage/{naive,structured,grounded,agent}` and `POST /runs`
@@ -311,6 +311,15 @@ conversation can be read top to bottom:
 - **History is append-only.** The assistant message is `response.content`
   appended whole, thinking blocks included. Haiku 5.5 thinks by default, and a
   resent thinking block is rejected if anything before it changed.
+- **Prompt caching (Phase 07b).** With `PROMPT_CACHE=1` (the default) each
+  request marks two cache breakpoints: the system prompt (tools come before it
+  in the prefix, so they are covered) and the last block of the newest message,
+  so every turn reads the turns before it from cache. The marks go on copies made
+  for the request; the kept history never holds `cache_control`, so breakpoints
+  can't pile up past the API's four. The prefix shared across issues (tools and
+  system) is too short to be cached on its own, so the saving is within a run:
+  multi-turn runs bill their prompt at about 0.47× and one-turn runs at about
+  0.93× (`MEASUREMENTS.md`, Phase 07b).
 - **One user message per turn.** Every `tool_use` needs a `tool_result` with
   the matching id, and all results for one response travel together. The
   trace keeps the first 2,000 characters of each output; the model gets the
@@ -797,4 +806,5 @@ migration.
 | 06 Workflow, Piece B | done: patch and verify against each fix's pre-fix commit, fail-to-pass in Docker (section 10), eval-only |
 | 06 Workflow, Piece C | done: the run browser at `#/runs` (stored staged runs stage by stage, the agent's diff beside the real fix's). Live stage events through `on_event` and `LiveEvent` are still open; that is where staged runs would reach `/runs` |
 | 07 Production, Piece A | done, $0: the sandboxed test container (section 10), the nightly retrieval eval (`eval/nightly.py`), the hand-labelled failure taxonomy (`docs/failure-taxonomy.md`), the eval dashboard (`GET /eval/summary`, `#/eval`) and one-command startup (`scripts/dev.py`) |
-| 07 Production, Piece B | next, needs credit: prompt caching through the cache columns in `calls`, a cheaper-model rerun, then the test split, opened once. Also open: the second corpus as a held-out generalization check, and the live run's limits (a shared registry or an events table for more than one process, and auth) |
+| 07 Production, Piece B | done, $1.15: prompt caching (section 7), grounded triage on the local model across val, and the test split opened once through `eval/seal.py` (two declared runs, a clean tree, the commit recorded in `data/splits/TEST_OPENED.json`) |
+| Beyond the roadmap | the second corpus as a held-out generalization check, and the live run's limits (a shared registry or an events table for more than one process, and auth). Any further tuning happens on val; test has been spent |

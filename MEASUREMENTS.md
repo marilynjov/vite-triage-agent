@@ -1048,3 +1048,112 @@ is a conditional one (07b, paid).
 **Caveats.** One repeat and one labeller; 20 of 67 failures. The agent is
 nondeterministic per run (Phase 04), so the same issue can fail differently
 on another run.
+
+---
+
+## Phase 07b — prompt caching, and the test split opened once (2026-11-23/24)
+
+Spend: $1.15 in all ($0.08 caching check, $0.80 `test-final`, $0.27
+`test-staged-n40`), out of $5.07 of credit.
+
+### Prompt caching
+
+`PROMPT_CACHE=1` marks the system prompt and the newest message as cache
+breakpoints (ARCHITECTURE.md section 7). Measured on the `agent` arm over the
+40-row val slice, one repeat:
+`PROVIDER=anthropic python -m eval.ablation --arms agent --split val --n 40 --repeats 1 --name val-n40-cache --max-dollars 0.25`.
+
+| | cached (`val-n40-cache`, 40 runs) | uncached (`val-n40-r3` agent, 120 runs) |
+|---|---|---|
+| $/triage | $0.00198 | $0.00282 |
+| turns per run | 1.35 | 1.53 |
+| cache read tokens | 335,005 | 0 |
+| cache write tokens | 408,297 | 0 |
+| clean recall@1 | 39.5% | 43.4% (39.5–45.6% across repeats) |
+
+The two runs use a different mix of turns, so the fair comparison counts the
+same tokens both ways. Charging reads at 0.1× and writes at 1.25× of the input
+rate, the cached run's prompt costs **0.73×** what it would cost uncached:
+0.47× for the 9 multi-turn runs and 0.93× for the 31 one-turn runs. Every run
+wrote a cache entry. The tools-and-system prefix shared across issues is too
+short to be cached by itself, so the saving comes from a run's later turns
+reading its earlier ones. Recall is within the uncached repeats' range, as it
+should be: caching doesn't change what the model sees. Caching stays on.
+
+### The test split: final, held-out numbers
+
+The test split (207 issues, 154 clean) had been sealed since Phase 00 and was
+opened through `eval/seal.py`. Only the two declared runs could open it, the
+first opening needed a clean working tree, and `data/splits/TEST_OPENED.json`
+records the commit of each (`test-final` at `0bfcf10`, `test-staged-n40` at
+`2f9ab69`, which only adds the first seal record). Nothing was changed after
+the runs. Caching was on for both.
+
+`PROVIDER=anthropic python -m eval.ablation --arms retrieval,grounded,agent --split test --n 100000 --repeats 1 --name test-final --open-test --max-dollars 1.60`
+
+| clean recall@1 | test (154) | val (175, `val-n206-r1`) |
+|---|---|---|
+| retrieval | 26.6% | 24.1% |
+| grounded | 48.4% | 45.2% |
+| **agent** | **54.6%** | 53.1% |
+
+| test | subset | recall@1 | recall@5 | MRR | $/triage | run errors |
+|---|---|---|---|---|---|---|
+| retrieval | clean | 26.6% | 56.2% | 48.1% | $0 | 0 |
+| grounded | clean | 48.4% | 65.1% | 66.2% | $0.0017 | 2 |
+| agent | clean | 54.6% | 69.1% | 72.7% | $0.0021 | 2 |
+| retrieval | all | 29.2% | 61.7% | 52.4% | | |
+| grounded | all | 53.7% | 68.7% | 71.9% | | |
+| agent | all | 59.0% | 73.5% | 78.3% | | |
+
+Paired over issues (recall@1, 95% bootstrap):
+
+| | clean | all |
+|---|---|---|
+| agent vs grounded | **+6.2 pts [+0.6, +11.9]** (19 wins, 7 losses) | +5.3 [+0.6, +10.2] |
+| grounded vs retrieval | +21.8 [+14.8, +28.9] | +24.5 [+18.2, +30.8] |
+| agent vs retrieval | +27.9 [+20.4, +35.6] | +29.8 [+23.5, +36.4] |
+
+**The val result holds on issues nothing was tuned on.** On val the agent beat
+grounded by +8.0 [+2.6, +13.4]; on test it is +6.2 [+0.6, +11.9]. Both
+intervals exclude zero, so looking pays on held-out data too, by a smaller
+margin with a lower bound close to zero. Every arm scores a little higher on
+test than on val, which is what you would expect if val was not overfit (test
+issues are later in time, and nothing about them was seen). The agent used a
+tool in 43% of runs (grep 118, read_file 71, git_log 2, list_dir 1 calls).
+Caching brought the agent's cost to $0.0021 a triage, against $0.0031 on val
+before caching.
+
+### Staged pipeline on 40 test issues
+
+`PROVIDER=anthropic python -m eval.ablation --arms staged --split test --n 40 --repeats 1 --name test-staged-n40 --open-test --max-dollars 0.80`
+(the 40 lowest-numbered test issues, 31 clean).
+
+| | test (31 clean) | val 06a (33 clean issues × 2) |
+|---|---|---|
+| clean recall@1 | 47.3% | 41.9% |
+| hit | 48.4% | — |
+| fails most, miss + error | **hypothesize 19.4%** (understand 16.1%, locate 16.1%) | understand 25.8% |
+| fault overlaps gold lines, among judged hits | 85.7% | — |
+| $/triage | $0.0066 | ~$0.013 |
+
+On test, more runs are lost at hypothesize than at understand, the reverse of
+val. With 31 clean runs one run is about 3 points, so the three stages are
+within two runs of each other. Read it as "no stage dominates on test", not as
+a new answer to Phase 06's gate. Caching roughly halved the staged pipeline's
+cost, because its stages run many turns (8.2 on average).
+
+### Grounded triage on the local model (all 206 val rows)
+
+Pending: `PROVIDER=ollama python -m eval.grounded --split val --n 206` is
+running at about 1.6 minutes per issue. At 113 of 206, 24 answers broke the
+contract (21%).
+
+### Caveats
+
+- One repeat on test, and the agent is nondeterministic per run (Phase 04).
+  The intervals cover the spread over issues, not over reruns.
+- The pin is after every fix, for test as for val (the Phase 05a caveat). The
+  tools can open a file in its already-fixed state.
+- Test is now spent as evidence. A change made from here is measured on val,
+  and its test number would no longer be held out.

@@ -23,7 +23,8 @@ the top k the system proposed?
 | 04 Tools | four git tools at the pinned commit, a hand-written tool-use loop, `/triage/agent`, a trace in the UI | recall@1 41.5% vs grounded 30.4% (40 rows), but 26/40 runs used no tools |
 | 05 The agent loop | Piece A, [does looking pay?](docs/superpowers/specs/2026-11-01-phase-05a-does-looking-pay-design.md), is answered; Pieces B+C are done: a live run streamed to the UI, and token, time and dollar budgets ([spec](docs/superpowers/specs/2026-11-01-phase-05bc-live-run-design.md)) | clean recall@1 on 206 rows: 24.1% retrieval, 45.2% grounded, 53.1% agent (agent vs grounded paired interval excludes 0), $0.0031 vs $0.0018 per triage |
 | 06 Multi-step workflow | Piece A, [staged analysis](docs/superpowers/specs/2026-11-02-phase-06a-staged-analysis-design.md): locate → understand → hypothesize under one budget, each run attributed to the stage that lost it against `git blame` gold regions; Piece B, [patch and verify](docs/superpowers/specs/2026-11-02-phase-06b-patch-verify-design.md): a patch stage writes edits against the commit before the fix, graded fail-to-pass on the real fix's unit tests in Docker; Piece C: the run browser at `#/runs` | understand fails most: 25.8% of clean runs lost there (miss + error), vs 16.7% locate, 13.6% hypothesize (40 rows × 2). half of it budget stops, which a per-stage token share and more understand turns would target (a reading, not yet measured). Staged vs agent recall@1 −1.4 pts, interval spans 0, at ~4× the cost. Patch: 29 of 43 unit-tested issues valid; 6 of 25 patchable runs pass (24%), $0.020 per pass; hits pass 3/20, misses 3/9, too few runs to separate them |
-| 07 Production, Piece A ($0) | a sandboxed test container, a nightly retrieval eval, a hand-labelled [failure taxonomy](docs/failure-taxonomy.md), the `#/eval` dashboard, one-command startup; Piece B (caching, a cheaper model, the test split) needs credit | nightly clean recall@10 68.5% (206 rows), unchanged since Phase 03. Of 20 sampled agent misses, 6 never looked past retrieval's top 10 and 5 stopped where the symptom shows |
+| 07 Production, Piece A ($0) | a sandboxed test container, a nightly retrieval eval, a hand-labelled [failure taxonomy](docs/failure-taxonomy.md), the `#/eval` dashboard, one-command startup | nightly clean recall@10 68.5% (206 rows), unchanged since Phase 03. Of 20 sampled agent misses, 6 never looked past retrieval's top 10 and 5 stopped where the symptom shows |
+| 07 Production, Piece B ($1.15) | prompt caching in the agent loop; the test split, opened once under a seal that records the commit | **held-out test, clean recall@1 (154 issues): 26.6% retrieval, 48.4% grounded, 54.6% agent**; agent vs grounded +6.2 pts, interval [+0.6, +11.9]. Caching cut the agent's cost to $0.0021 per triage |
 
 Every number, with its caveats, is in [MEASUREMENTS.md](MEASUREMENTS.md). How
 the pieces fit and why each boundary is where it is: [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -87,7 +88,7 @@ Use `npm ci`, not `npm install`: the lockfile was created with
 ## Measuring
 
 All evals use the fixed val slice (lowest issue numbers first), so runs are
-comparable. The test split stays sealed until Phase 07.
+comparable. The test split was opened once, in Phase 07b (`data/splits/TEST_OPENED.json`); tune on val.
 
 | Command | What it scores | Cost |
 |---|---|---|
@@ -216,4 +217,6 @@ and without them, and quote the harder number.
 test is the future. A random split would let the system learn from issues
 filed after the ones it is tested on, which never happens in production.
 
-**test.jsonl is sealed until Phase 07.** Tune against `val`.
+**test.jsonl was opened once, in Phase 07b,** by the two runs `eval/seal.py`
+declares, at the commits recorded in `data/splits/TEST_OPENED.json`. Its
+numbers are the held-out result; any further tuning is against `val`.
