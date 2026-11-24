@@ -9,11 +9,41 @@ files the real fix changed are the answer. So every change to the system has a
 number, mainly recall@k: of the files the fix touched, what fraction appear in
 the top k the system proposed?
 
+## The result
+
+On **154 held-out test issues** that nothing was tuned on (Vite's test split,
+opened once at the end, clean rows), with recall@1 meaning *the first file
+proposed is one the real fix changed*:
+
+| system | recall@1 | recall@5 | cost per triage |
+|---|---|---|---|
+| retrieval alone (embeddings, no model call) | 26.6% | 56.2% | $0 |
+| grounded: the model re-ranks retrieval's top 10 | 48.4% | 65.1% | $0.0017 |
+| **agent: the model also opens files with read-only git tools** | **54.6%** | **69.1%** | **$0.0021** |
+
+- **Looking pays, on data it never saw.** The agent beats a single re-rank by
+  +6.2 points of recall@1 (95% paired interval [+0.6, +11.9]). On val it was
+  +8.0: the gap shrank but held.
+- **Retrieval sets the ceiling, and a cheap change moved it.** Prefixing each
+  chunk with its file path and imports lifted recall@10 from 64.1% to 68.5%. A
+  tree-sitter chunker was a measured negative result, with a mechanical cause.
+- **Finding the file is not fixing the bug.** Patches written against the
+  pre-fix commit and run against the real fix's own tests pass 24% of the time
+  (6 of 25), and at this sample size finding the right file did not visibly
+  predict a pass.
+- **Where it fails.** Of 20 hand-read misses, 6 never looked past retrieval's
+  top 10 and 5 picked the file where the symptom shows instead of where the fix
+  went ([failure taxonomy](docs/failure-taxonomy.md)).
+
+One repeat on test, and the agent is nondeterministic per run; the caveats,
+including a token-budget fix found after the test run (agent recall@1 about
+0.1 point lower under it), are in [MEASUREMENTS.md](MEASUREMENTS.md).
+
 **Roadmap:** https://claude.ai/code/artifact/e3009790-bc86-4b92-bc51-628065760b54
 
 ## Where it stands
 
-| Phase | What it built | Headline (Vite val, clean rows) |
+| Phase | What it built | Headline (clean rows; val unless it says test) |
 |---|---|---|
 | 00 Ground truth | the miner: issue → fix → files, a pinned commit, a temporal split | 1,375 labeled examples |
 | 01 First call | `/triage/naive`, every call costed in Postgres | ~$0.003 per triage on Haiku 4.5 |
