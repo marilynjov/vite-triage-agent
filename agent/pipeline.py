@@ -46,6 +46,10 @@ class PipelineRun:
         return sum(r.output_tokens for r in self.runs.values())
 
     @property
+    def prompt_tokens(self) -> int:
+        return sum(r.prompt_tokens for r in self.runs.values())
+
+    @property
     def cost_usd(self) -> Decimal:
         return sum((r.cost_usd for r in self.runs.values()), Decimal("0"))
 
@@ -80,7 +84,7 @@ def run_pipeline(title: str, body: str, candidates: list[FileHit], cutoff: str, 
     def stage_budget(stage: str) -> tuple[Budget, tuple[str, float] | None]:
         b = Budget(
             max_turns=STAGE_TURNS[stage],
-            max_tokens=budget.max_tokens - (pr.input_tokens + pr.output_tokens),
+            max_tokens=budget.max_tokens - (pr.prompt_tokens + pr.output_tokens),
             max_seconds=budget.max_seconds - pr.seconds,
             max_dollars=budget.max_dollars - float(pr.cost_usd),
         )

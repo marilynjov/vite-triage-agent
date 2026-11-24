@@ -316,10 +316,13 @@ conversation can be read top to bottom:
   in the prefix, so they are covered) and the last block of the newest message,
   so every turn reads the turns before it from cache. The marks go on copies made
   for the request; the kept history never holds `cache_control`, so breakpoints
-  can't pile up past the API's four. The prefix shared across issues (tools and
-  system) is too short to be cached on its own, so the saving is within a run:
-  multi-turn runs bill their prompt at about 0.47× and one-turn runs at about
-  0.93× (`MEASUREMENTS.md`, Phase 07b).
+  can't pile up past the API's four. The ~4k-token prefix shared across issues
+  (tools and system) is read from cache across issues, but every run also writes
+  its issue-specific part at a premium, so one-turn runs bill their prompt at
+  about 0.93× and multi-turn runs, whose later turns read the earlier ones, at
+  about 0.47× (`MEASUREMENTS.md`, Phase 07b). With caching the API reports cached
+  prompt tokens apart from `input_tokens`; `Run.prompt_tokens` adds them back, and
+  the token budget counts it.
 - **One user message per turn.** Every `tool_use` needs a `tool_result` with
   the matching id, and all results for one response travel together. The
   trace keeps the first 2,000 characters of each output; the model gets the
@@ -373,7 +376,7 @@ callback and budgets.
   swallows the callback's exceptions. A broken observer costs a missing event,
   not a lost triage.
 - **Budgets are four limits, checked before a call.** `AGENT_MAX_TURNS` (12),
-  `AGENT_MAX_TOKENS` (150,000, input plus output), `AGENT_MAX_SECONDS` (180)
+  `AGENT_MAX_TOKENS` (150,000, prompt tokens cached or not, plus output), `AGENT_MAX_SECONDS` (180)
   and `AGENT_MAX_DOLLARS` (0.05). Before every API call after the first, the
   loop compares the run's totals with the four caps and raises
   `BudgetExceeded` naming the limit and its setting. **The overshoot is up to
@@ -806,5 +809,5 @@ migration.
 | 06 Workflow, Piece B | done: patch and verify against each fix's pre-fix commit, fail-to-pass in Docker (section 10), eval-only |
 | 06 Workflow, Piece C | done: the run browser at `#/runs` (stored staged runs stage by stage, the agent's diff beside the real fix's). Live stage events through `on_event` and `LiveEvent` are still open; that is where staged runs would reach `/runs` |
 | 07 Production, Piece A | done, $0: the sandboxed test container (section 10), the nightly retrieval eval (`eval/nightly.py`), the hand-labelled failure taxonomy (`docs/failure-taxonomy.md`), the eval dashboard (`GET /eval/summary`, `#/eval`) and one-command startup (`scripts/dev.py`) |
-| 07 Production, Piece B | done, $1.15: prompt caching (section 7), grounded triage on the local model across val, and the test split opened once through `eval/seal.py` (two declared runs, a clean tree, the commit recorded in `data/splits/TEST_OPENED.json`) |
+| 07 Production, Piece B | done, $1.15: prompt caching (section 7) and the test split opened once through `eval/seal.py` (two declared runs, a clean tree, the commit recorded in `data/splits/TEST_OPENED.json`). Grounded triage on the local model across all of val is still running |
 | Beyond the roadmap | the second corpus as a held-out generalization check, and the live run's limits (a shared registry or an events table for more than one process, and auth). Any further tuning happens on val; test has been spent |

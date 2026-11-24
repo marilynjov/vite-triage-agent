@@ -1074,10 +1074,13 @@ breakpoints (ARCHITECTURE.md section 7). Measured on the `agent` arm over the
 The two runs use a different mix of turns, so the fair comparison counts the
 same tokens both ways. Charging reads at 0.1× and writes at 1.25× of the input
 rate, the cached run's prompt costs **0.73×** what it would cost uncached:
-0.47× for the 9 multi-turn runs and 0.93× for the 31 one-turn runs. Every run
-wrote a cache entry. The tools-and-system prefix shared across issues is too
-short to be cached by itself, so the saving comes from a run's later turns
-reading its earlier ones. Recall is within the uncached repeats' range, as it
+0.47× for the 9 multi-turn runs and 0.93× for the 31 one-turn runs. The
+tools-and-system prefix shared across issues (4,044 tokens) is cached across
+issues: 29 of the 31 one-turn runs read exactly that much on their only turn.
+But every run also writes its own issue-specific part at the 1.25× premium
+(at least 7.2k tokens), which a one-turn run never reads back, so one-turn runs
+save little. Most of the saving is a run's later turns reading its earlier
+ones. Recall is within the uncached repeats' range, as it
 should be: caching doesn't change what the model sees. Caching stays on.
 
 ### The test split: final, held-out numbers
@@ -1118,8 +1121,10 @@ Paired over issues (recall@1, 95% bootstrap):
 grounded by +8.0 [+2.6, +13.4]; on test it is +6.2 [+0.6, +11.9]. Both
 intervals exclude zero, so looking pays on held-out data too, by a smaller
 margin with a lower bound close to zero. Every arm scores a little higher on
-test than on val, which is what you would expect if val was not overfit (test
-issues are later in time, and nothing about them was seen). The agent used a
+test than on val, retrieval included, and retrieval was never tuned on val,
+so test is probably slightly easier. The rise is not evidence that val wasn't
+overfit; the honest signal is the agent's margin over grounded, which shrank
+from +8.0 to +6.2 points but still excludes zero. The agent used a
 tool in 43% of runs (grep 118, read_file 71, git_log 2, list_dir 1 calls).
 Caching brought the agent's cost to $0.0021 a triage, against $0.0031 on val
 before caching.
@@ -1135,13 +1140,32 @@ before caching.
 | hit | 48.4% | — |
 | fails most, miss + error | **hypothesize 19.4%** (understand 16.1%, locate 16.1%) | understand 25.8% |
 | fault overlaps gold lines, among judged hits | 85.7% | — |
-| $/triage | $0.0066 | ~$0.013 |
+| $/triage | $0.0066 | $0.0113 |
 
 On test, more runs are lost at hypothesize than at understand, the reverse of
 val. With 31 clean runs one run is about 3 points, so the three stages are
 within two runs of each other. Read it as "no stage dominates on test", not as
-a new answer to Phase 06's gate. Caching roughly halved the staged pipeline's
-cost, because its stages run many turns (8.2 on average).
+a new answer to Phase 06's gate.
+
+**The token budget did not apply to this run.** With caching on, the API
+reports cached prompt tokens apart from `input_tokens`, and until a fix made
+after these runs the loop's token budget counted only `input_tokens`, so the
+150k `AGENT_MAX_TOKENS` cap could not trip. On val (uncached) 5 of the 80 staged
+runs stopped on that cap, all at understand, 4 of them on clean rows: about 6 of
+the 25.8 points val lost at understand. So the test staged run is not
+comparable to val on stage attribution or on recall@1 (47.3% vs 41.9%): part of
+the difference is that test runs could not be stopped for tokens. The budget
+now counts cached tokens too (`Run.prompt_tokens`). Test can't be rerun to
+correct this. In `test-final` it touches one run: grounded never comes near
+the cap (36k tokens at most), but one clean agent run reached 158,920 prompt
+plus output tokens over 9 turns and scored recall@1 0.2. Under the fixed
+budget it would have stopped as a budget error and scored 0, which lowers the
+agent's clean recall@1 by 0.2/154, about 0.13 points (54.6% to about 54.5%); the
+paired comparison with grounded does not change sign. The dollar cap applied
+throughout, since cache tokens are priced.
+
+Caching cut the staged pipeline's cost by about 40% ($0.0113 to $0.0066),
+because its stages run many turns (8.2 on average).
 
 ### Grounded triage on the local model (all 206 val rows)
 

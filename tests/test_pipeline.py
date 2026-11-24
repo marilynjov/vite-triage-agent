@@ -284,3 +284,12 @@ def test_unexpected_exception_is_attributed_and_keeps_earlier_spend():
     assert e.stage == "understand" and str(e) == "KeyError: 'kaboom'"
     assert e.run.failed_stage == "understand" and set(e.run.runs) == {"locate"}
     assert e.run.cost_usd > 0
+
+
+def test_a_stage_budget_subtracts_cached_prompt_tokens_too(monkeypatch):
+    seen = _spy(monkeypatch)
+    b = Budget(max_turns=99, max_tokens=1000, max_seconds=100.0, max_dollars=1.0)
+    first = _resp(_loc())
+    first.usage.cache_read_input_tokens, first.usage.cache_creation_input_tokens = 300, 200
+    _go(FakeClient(first, _resp(_und()), _resp(_hyp())), budget=b)
+    assert seen[1].max_tokens == 1000 - (100 + 300 + 200 + 10)

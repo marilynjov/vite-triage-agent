@@ -104,6 +104,13 @@ class Run:
         return sum(t.output_tokens for t in self.turns)
 
     @property
+    def prompt_tokens(self) -> int:
+        """Every prompt token, cached or not: with caching, input_tokens is only the
+        uncached part, and the token budget must see the whole prompt."""
+        return sum(t.input_tokens + t.cache_read_input_tokens + t.cache_creation_input_tokens
+                   for t in self.turns)
+
+    @property
     def cost_usd(self) -> Decimal:
         return sum((t.cost_usd for t in self.turns), Decimal("0"))
 
@@ -161,7 +168,7 @@ def _emit(on_event: Callable[[dict], None] | None, event: dict) -> None:
 
 
 def _totals(out: Run, t0: float) -> dict:
-    return {"turns": len(out.turns), "tokens": out.input_tokens + out.output_tokens,
+    return {"turns": len(out.turns), "tokens": out.prompt_tokens + out.output_tokens,
             "cost_usd": float(out.cost_usd), "seconds": _now() - t0}
 
 

@@ -143,3 +143,12 @@ def test_callback_errors_are_logged_not_raised(caplog):
                        budget=_budget(), on_event=boom)
     assert out.result is not None
     assert "live event callback failed" in caplog.text
+
+
+def test_cached_prompt_tokens_count_toward_the_token_limit():
+    # with caching, input_tokens is only the uncached part; the budget must see the whole prompt
+    cached = _tool_turn()
+    cached.usage.input_tokens, cached.usage.cache_read_input_tokens = 5, 100
+    events, _, err = _go(cached, budget=_budget(max_tokens=50))
+    assert err.limit == "tokens" and len(err.run.turns) == 1
+    assert err.run.prompt_tokens == 105
