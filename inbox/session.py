@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from api import config as C
 from mining import config as M
 
 from . import sync as sync_mod
+from .app_auth import installation_token
 from .github import GitHubError, Repo
 from .triage import MARKER, RUNS, recommend, record, render, triage
 
@@ -124,6 +126,21 @@ def session(*, repo, repo_path, pin_path: Path = M.PINNED_SHA, ask=input, out=pr
     return result
 
 
+def github_token(*, getenv=os.getenv, exchange=installation_token) -> tuple[str, str]:
+    """The token to post with, and who it posts as: the GitHub App when GITHUB_APP_ID and
+    GITHUB_APP_KEY_PATH are both set (in the corpus env file), else GITHUB_TOKEN. One
+    without the other is an error, so a typo can't fall back to posting as you."""
+    app_id, key_path = getenv("GITHUB_APP_ID") or "", getenv("GITHUB_APP_KEY_PATH") or ""
+    if app_id and key_path:
+        return (exchange(M.OWNER, M.NAME, app_id, Path(key_path).expanduser()),
+                f"the GitHub App {app_id}")
+    if app_id or key_path:
+        missing = "GITHUB_APP_KEY_PATH" if app_id else "GITHUB_APP_ID"
+        raise GitHubError(f"{missing} is not set: set both GITHUB_APP_ID and GITHUB_APP_KEY_PATH "
+                          "to post as the app, or neither to use GITHUB_TOKEN")
+    return getenv("GITHUB_TOKEN") or M.GITHUB_TOKEN, "GITHUB_TOKEN (as your account)"
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="python -m inbox")
     ap.add_argument("command", nargs="?", choices=["score"])
@@ -138,7 +155,9 @@ def main(argv: list[str] | None = None) -> None:
     if C.PROVIDER != "anthropic":
         raise SystemExit("the inbox needs PROVIDER=anthropic (tool use is Claude-only)")
     try:
-        session(repo=Repo(M.OWNER, M.NAME, M.GITHUB_TOKEN), repo_path=M.REPO_PATH,
+        token, who = github_token()
+        print(f"posting as {who}")
+        session(repo=Repo(M.OWNER, M.NAME, token), repo_path=M.REPO_PATH,
                 max_dollars=args.max_dollars, again=frozenset(args.again))
     except GitHubError as exc:
         sys.exit(str(exc))

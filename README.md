@@ -180,6 +180,30 @@ text and code it reads are sent to Anthropic's API; nothing from the target
 repo is written into this one. `GITHUB_TOKEN=$(gh auth token)` is the easy way
 to get a token that can read a private repo and post comments.
 
+### Post as a GitHub App (optional)
+
+By default comments are posted with `GITHUB_TOKEN`, so they appear under your
+own account. To post as a bot (`<app-name>[bot]`, with a token that lasts an
+hour and reaches only the repos you choose):
+
+1. GitHub → Settings → Developer settings → GitHub Apps → **New GitHub App**.
+   Any homepage URL; untick **Webhook → Active**.
+2. Repository permissions: **Issues: Read and write** (Metadata becomes read-only).
+3. Create it, note the **App ID**, and **Generate a private key**. Keep the
+   `.pem` outside any repo (for example `~/.config/<name>/`, `chmod 600`).
+4. **Install App** → only the repository you triage.
+5. Add both to the corpus env file (gitignored):
+
+   ```bash
+   GITHUB_APP_ID=123456
+   GITHUB_APP_KEY_PATH=~/.config/<name>/<app>.private-key.pem
+   ```
+
+The session prints who it is posting as before anything else. With both set it
+signs a short JWT with the key (using `openssl`, no extra library) and swaps it
+for an installation token; with neither it uses `GITHUB_TOKEN`; with only one
+it stops and names the missing one.
+
 ## Measuring
 
 All evals use the fixed val slice (lowest issue numbers first), so runs are

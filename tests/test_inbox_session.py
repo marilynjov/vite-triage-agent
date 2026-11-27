@@ -218,3 +218,32 @@ def test_a_failed_run_is_offered_again_next_time(tmp_path):
     h.answers = ["all", "n"]
     h.go()
     assert "#1" in " ".join(h.said) and "#2" not in " ".join(s for s in h.said if s.strip().startswith("#"))
+
+
+# --- GitHub App identity (Phase 08b) ---
+
+def _env(d):
+    return lambda name, default=None: d.get(name, default)
+
+
+def test_both_app_variables_use_the_app():
+    calls = []
+    tok, who = S.github_token(getenv=_env({"GITHUB_APP_ID": "123", "GITHUB_APP_KEY_PATH": "/k.pem",
+                                           "GITHUB_TOKEN": "mine"}),
+                              exchange=lambda *a: calls.append(a) or "ghs_app")
+    assert tok == "ghs_app" and "GitHub App 123" in who
+    assert calls and calls[0][2] == "123" and str(calls[0][3]) == "/k.pem"
+
+
+def test_neither_uses_github_token():
+    tok, who = S.github_token(getenv=_env({"GITHUB_TOKEN": "mine"}),
+                              exchange=lambda *a: pytest.fail("no app configured"))
+    assert tok == "mine" and "your account" in who
+
+
+@pytest.mark.parametrize("env,missing", [({"GITHUB_APP_ID": "123"}, "GITHUB_APP_KEY_PATH"),
+                                         ({"GITHUB_APP_KEY_PATH": "/k.pem"}, "GITHUB_APP_ID")])
+def test_only_one_app_variable_is_an_error_naming_the_other(env, missing):
+    from inbox.github import GitHubError
+    with pytest.raises(GitHubError, match=missing):
+        S.github_token(getenv=_env(env), exchange=lambda *a: "x")
