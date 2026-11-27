@@ -16,6 +16,8 @@ import json
 import sys
 from pathlib import Path
 
+import httpx
+
 from api import config as C
 from mining import config as M
 
@@ -31,9 +33,11 @@ def yes(answer: str) -> bool:
 
 
 def _recorded(path: Path) -> set[int]:
+    """Issues with a recorded answer. A failed run doesn't count, so it's offered again."""
     if not path.exists():
         return set()
-    return {json.loads(l)["issue"] for l in path.read_text().splitlines() if l.strip()}
+    recs = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    return {r["issue"] for r in recs if not r.get("error")}
 
 
 def _choose(answer: str, numbers: list[int]) -> list[int]:
@@ -55,14 +59,19 @@ def session(*, repo, repo_path, pin_path: Path = M.PINNED_SHA, ask=input, out=pr
             return ""
 
     result = {"spent": 0.0, "triaged": [], "posted": [], "skipped": []}
+    where = f"{repo.owner}/{repo.name}"
     pin = pin_path.read_text().strip()
+    out(f"{where} at {pin[:7]}")
     head = sync.branch_head(repo_path, sync.default_branch(repo_path))
     sha = pin
     if head != pin:
         if yes(q(f"Branch moved {pin[:7]} -> {head[:7]}: re-pin and re-index? "
                  "(free, about a minute) [y/N] ")):
-            sync.repin(head)
-            sha = head
+            try:
+                sync.repin(head)
+                sha = head
+            except Exception as exc:  # the pin is put back; carry on at the old commit
+                out(f"re-index failed ({exc}); keeping {pin[:7]}.")
         else:
             out(f"Keeping {pin[:7]}: answers describe the code as of that commit.")
 
@@ -84,11 +93,12 @@ def session(*, repo, repo_path, pin_path: Path = M.PINNED_SHA, ask=input, out=pr
 
     by_number = {i.number: i for i in pending}
     for n in chosen:
-        if result["spent"] >= max_dollars:
+        left = max_dollars - result["spent"]
+        if left <= 0:
             result["skipped"].append(n)
             continue
         iss = by_number[n]
-        o = triage_fn(iss, sha)
+        o = triage_fn(iss, sha, max_dollars=left)
         result["spent"] += o.cost_usd
         result["triaged"].append(n)
         if o.error:
@@ -99,10 +109,13 @@ def session(*, repo, repo_path, pin_path: Path = M.PINNED_SHA, ask=input, out=pr
             f"${o.cost_usd:.4f}" + ("" if recommend(o) else
                                     " · probably not a code fix; not recommended to post"))
         url = None
-        if yes(q(f"Post this comment to #{n}? [y/N] ")):
-            url = repo.post_comment(n, render(o, iss, repo.owner, repo.name))
-            result["posted"].append(n)
-            out(f"  posted {url}")
+        if yes(q(f"Post this comment to {where}#{n}? [y/N] ")):
+            try:
+                url = repo.post_comment(n, render(o, iss, repo.owner, repo.name))
+                result["posted"].append(n)
+                out(f"  posted {url}")
+            except (GitHubError, httpx.HTTPError) as exc:  # the run is paid for: keep it
+                out(f"  could not post to #{n}: {exc}")
         record(o, url, runs_path)
     if result["skipped"]:
         out(f"Stopped at the ${max_dollars:.2f} cap; not run: {result['skipped']}")

@@ -45,3 +45,16 @@ def test_repin_writes_the_pin_then_reindexes(tmp_path):
     seen = []
     sync.repin("new123", pin_path=pin, reindex=lambda: seen.append(pin.read_text()))
     assert seen == ["new123\n"]
+
+
+def test_a_failed_reindex_puts_the_old_pin_back(tmp_path):
+    import pytest
+    pin = tmp_path / "pinned_sha.txt"
+    pin.write_text("old\n")
+
+    def boom():
+        raise RuntimeError("ollama down")
+
+    with pytest.raises(RuntimeError):
+        sync.repin("new123", pin_path=pin, reindex=boom)
+    assert pin.read_text() == "old\n"

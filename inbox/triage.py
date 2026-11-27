@@ -8,6 +8,7 @@ a session.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -51,12 +52,18 @@ def _from_run(issue: Issue, sha: str, run: loop.Run, error: str | None) -> Outco
                    cost_usd=float(run.cost_usd), error=error)
 
 
-def triage(issue: Issue, sha: str, *, search_fn=search.search_ranked, run_fn=loop.run) -> Outcome:
+def triage(issue: Issue, sha: str, *, max_dollars: float | None = None,
+           search_fn=search.search_ranked, run_fn=loop.run) -> Outcome:
+    """`max_dollars` is what the session has left: the run's dollar budget is the lower of
+    that and AGENT_MAX_DOLLARS, so a session can't pass its cap by more than one call."""
+    budget = loop.Budget.from_config()
+    if max_dollars is not None and max_dollars < budget.max_dollars:
+        budget = dataclasses.replace(budget, max_dollars=max_dollars)
     candidates = search_fn(f"{issue.title}\n\n{issue.body}", strategy=R.DEFAULT_STRATEGY,
                            k=C.GROUNDED_K, corpus=R.CORPUS)
     with tools.at_rev(sha):
         try:
-            run = run_fn(issue.title, issue.body, candidates, issue.created_at)
+            run = run_fn(issue.title, issue.body, candidates, issue.created_at, budget=budget)
         except loop.RunError as exc:
             return _from_run(issue, sha, exc.run, str(exc))
     return _from_run(issue, sha, run, None)

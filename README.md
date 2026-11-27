@@ -166,12 +166,15 @@ It never runs on a schedule, and every question defaults to **no** (Enter,
 2. **"Triage which?"** Only open issues it hasn't handled: `all`, some
    numbers, or `none`.
 3. **"Spend up to $X on N issues?"** A session cap (`--max-dollars`, default
-   $0.10) on top of each run's own budgets. Typical cost is about $0.002 an issue.
+   $0.10). Each run may spend only what the session has left, so the total can
+   pass the cap by at most one model call. Typical cost is about $0.002 an issue.
 4. **"Post this comment to #N?"** Asked for each answer after you've seen it,
    with a warning when it looks like a non-code issue or has low confidence.
 
-Every run is recorded under the corpus's `DATA_DIR/live/`. `--again N`
-re-offers an issue. Once issues close, `python -m mining all` (free) then
+It names the repo first and in every post question, so a missing `ENV_FILE`
+can't post somewhere unexpected. Every run is recorded under the corpus's
+`DATA_DIR/live/`, posted or not, even if posting fails; a run that failed is
+offered again next time, and `--again N` re-offers any issue. Once issues close, `python -m mining all` (free) then
 `python -m inbox score` shows how often it was right in real use. The issue
 text and code it reads are sent to Anthropic's API; nothing from the target
 repo is written into this one. `GITHUB_TOKEN=$(gh auth token)` is the easy way

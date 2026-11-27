@@ -100,3 +100,16 @@ def test_record_appends_one_line_per_call(tmp_path):
     assert [l["issue"] for l in lines] == [7, 8]
     assert lines[0]["posted_url"] is None and lines[1]["posted_url"].endswith("#c1")
     assert {"files", "sha", "cost_usd", "error", "at"} <= set(lines[0])
+
+
+@pytest.mark.parametrize("cap,expected", [(None, 0.05), (0.03, 0.03), (0.5, 0.05)])
+def test_triage_caps_the_runs_dollars_at_what_the_session_has_left(monkeypatch, cap, expected):
+    monkeypatch.setenv("AGENT_MAX_DOLLARS", "0.05")
+    seen = {}
+
+    def run_fn(*a, budget=None, **k):
+        seen["dollars"] = budget.max_dollars
+        return _run(_result())
+
+    T.triage(ISSUE, "abc", search_fn=search, run_fn=run_fn, max_dollars=cap)
+    assert seen["dollars"] == pytest.approx(expected)

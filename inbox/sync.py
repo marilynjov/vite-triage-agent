@@ -37,5 +37,13 @@ def _reindex() -> None:
 
 
 def repin(sha: str, *, pin_path: Path = M.PINNED_SHA, reindex=_reindex) -> None:
+    """Point the pin at `sha` and rebuild the index; if the rebuild fails, put the old pin
+    back, so the pin never names a commit the index wasn't built from."""
+    old = pin_path.read_text() if pin_path.exists() else None
     pin_path.write_text(sha + "\n")
-    reindex()
+    try:
+        reindex()
+    except BaseException:
+        if old is not None:
+            pin_path.write_text(old)
+        raise
