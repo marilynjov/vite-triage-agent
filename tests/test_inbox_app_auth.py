@@ -67,3 +67,24 @@ def test_an_app_not_installed_on_the_repo_says_so(key):
     t = httpx.MockTransport(lambda req: httpx.Response(404, json={"message": "Not Found"}))
     with pytest.raises(GitHubError, match=r"acme/widgets.*Install App"):
         app_auth.installation_token("acme", "widgets", "123", key, transport=t, now=NOW)
+
+
+@pytest.mark.parametrize("step,status", [("lookup", 403), ("lookup", 502), ("token", 500),
+                                         ("token", 422)])
+def test_any_other_refusal_is_a_github_error_not_a_traceback(key, step, status):
+    def handler(req):
+        if req.url.path.endswith("/installation"):
+            if step == "lookup":
+                return httpx.Response(status, json={"message": "app suspended"})
+            return httpx.Response(200, json={"id": 42})
+        return httpx.Response(status, json={"message": "boom"})
+
+    with pytest.raises(GitHubError, match=str(status)):
+        app_auth.installation_token("acme", "widgets", "123", key,
+                                    transport=httpx.MockTransport(handler), now=NOW)
+
+
+def test_a_rejected_jwt_says_check_the_app_id_and_clock(key):
+    t = httpx.MockTransport(lambda req: httpx.Response(401, json={"message": "bad jwt"}))
+    with pytest.raises(GitHubError, match=r"rejected the app's JWT.*GITHUB_APP_ID.*clock"):
+        app_auth.installation_token("acme", "widgets", "123", key, transport=t, now=NOW)

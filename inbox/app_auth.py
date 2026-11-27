@@ -50,14 +50,24 @@ def installation_token(owner: str, name: str, app_id: str, key_path: Path, *,
     with httpx.Client(base_url=API, headers={**HEADERS, "Authorization": f"Bearer {jwt}"},
                       timeout=30.0, transport=transport) as http:
         found = http.get(f"/repos/{owner}/{name}/installation")
-        if found.status_code in (401, 404):
-            raise GitHubError(f"GitHub App {app_id} is not installed on {owner}/{name} "
-                              f"({found.status_code}): open the app's settings, Install App, "
-                              "and choose that repository; also check GITHUB_APP_ID.")
-        found.raise_for_status()
+        if found.status_code == 401:
+            raise GitHubError(f"GitHub rejected the app's JWT (401): check that GITHUB_APP_ID "
+                              f"({app_id}) matches the private key, and that the system clock is right.")
+        if found.status_code == 404:
+            raise GitHubError(f"GitHub App {app_id} is not installed on {owner}/{name} (404): "
+                              "open the app's settings, Install App, and choose that repository.")
+        _ok(found, f"finding app {app_id}'s installation on {owner}/{name}")
         made = http.post(f"/app/installations/{found.json()['id']}/access_tokens")
-        if made.status_code in (401, 403, 404):
-            raise GitHubError(f"GitHub refused an installation token for app {app_id} "
-                              f"({made.status_code}); check GITHUB_APP_ID and the key.")
-        made.raise_for_status()
+        _ok(made, f"getting an installation token for app {app_id}")
         return made.json()["token"]
+
+
+def _ok(r: httpx.Response, doing: str) -> None:
+    """Any other non-2xx becomes one readable line, never a traceback."""
+    if r.is_success:
+        return
+    try:
+        detail = r.json().get("message", "")
+    except ValueError:
+        detail = r.text[:200]
+    raise GitHubError(f"GitHub refused {doing} ({r.status_code}): {detail}")
