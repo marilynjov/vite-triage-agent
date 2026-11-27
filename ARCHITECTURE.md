@@ -54,6 +54,7 @@ its steps to the browser as they happen (section 8).
 | `eval/` | scoring: `retrieve` (recall@k, MRR), `grounded` (model re-rank vs retrieval), `agent` (retrieval vs grounded vs agent), `ablation` (the arms, including `staged`), `gold_regions` and `attribution` (which stage missed), `fixes`, `container`, `verify`, `verify_harness`, `patch_eval` and `patch_report` (patch and verify), `classify` (labels), `failures` (readable misses) | `mining/` data, `retrieval/`, `agent/`, `api/`, Docker |
 | `agent/` | the four git tools, the tool-use loop and its budgets, the staged pipeline (`pipeline`, `stages`), the patch stage (`patch`), the SDK-runner comparison, `explain` (prints a run's message array) | `api/` (prompt, cost, schema), `retrieval/`, git |
 | `api/` | FastAPI routes, prompts, the provider seam, cost, the `calls` table, the in-memory live-run registry (`live.py`) | `retrieval/`, `agent/`, providers, Postgres |
+| `inbox/` | on-demand triage of a repo's open issues: sync and re-pin, choose, confirm the spend, triage, confirm each comment; live scoring | `agent/`, `retrieval/`, `mining/` config, GitHub REST, git |
 | `web/` | one React page over the API, including the live trace reducer (`liveRun.ts`) | `api/` over HTTP |
 | `scripts/` | `gen_types.py`: Pydantic → TypeScript | `api/schema.py` |
 
@@ -810,4 +811,5 @@ migration.
 | 06 Workflow, Piece C | done: the run browser at `#/runs` (stored staged runs stage by stage, the agent's diff beside the real fix's). Live stage events through `on_event` and `LiveEvent` are still open; that is where staged runs would reach `/runs` |
 | 07 Production, Piece A | done, $0: the sandboxed test container (section 10), the nightly retrieval eval (`eval/nightly.py`), the hand-labelled failure taxonomy (`docs/failure-taxonomy.md`), the eval dashboard (`GET /eval/summary`, `#/eval`) and one-command startup (`scripts/dev.py`) |
 | 07 Production, Piece B | done, $1.15: prompt caching (section 7) and the test split opened once through `eval/seal.py` (two declared runs, a clean tree, the commit recorded in `data/splits/TEST_OPENED.json`), plus grounded triage on the local model across all of val, which re-ranks worse than retrieval alone |
+| 08 Issue inbox | done: `python -m inbox` triages a repo's open issues only when asked, with every re-index, spend and post confirmed; runs are recorded and scored once the miner labels the fixes (`inbox score`). The commit follows the default branch only when the user agrees to re-pin |
 | Beyond the roadmap | the second corpus as a held-out generalization check, and the live run's limits (a shared registry or an events table for more than one process, and auth). Any further tuning happens on val; test has been spent |
